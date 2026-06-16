@@ -1,0 +1,13 @@
+{
+  "name": "iroh-transfer",
+  "version": "0.1.0",
+  "description": "P2P file transfer powered by iroh",
+  "scripts": {
+    "dev": "tauri dev",
+    "build": "tauri build"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2",
+    "sharp": "^0.35.1"
+  }
+}

@@ -1,0 +1,76 @@
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+  background: #0d1117;
+  color: #c9d1d9;
+  height: 100vh;
+  overflow: hidden;
+}
+
+.app { display: flex; flex-direction: column; height: 100vh; }
+
+/* 状态栏 */
+.status-bar {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 20px;
+  background: #161b22; border-bottom: 1px solid #30363d;
+  font-size: 14px;
+}
+.node-id { color: #58a6ff; font-family: monospace; font-size: 12px; margin-left: auto; }
+
+/* 按钮 */
+.btn {
+  background: #21262d; color: #c9d1d9; border: 1px solid #30363d;
+  padding: 6px 14px; border-radius: 6px; cursor: pointer; font-size: 13px;
+}
+.btn:hover { background: #30363d; }
+.btn-primary { background: #238636; color: #fff; border-color: #238636; }
+.btn-primary:hover { background: #2ea043; }
+
+/* 主内容 */
+.main-content { display: flex; flex: 1; gap: 16px; padding: 16px; overflow: hidden; }
+
+.panel {
+  flex: 1; background: #161b22; border: 1px solid #30363d; border-radius: 10px;
+  padding: 20px; display: flex; flex-direction: column; gap: 14px; overflow-y: auto;
+}
+.panel h2 { font-size: 16px; color: #e6edf3; }
+
+/* 拖拽区 */
+.drop-zone {
+  border: 2px dashed #30363d; border-radius: 10px; padding: 40px; text-align: center;
+  cursor: pointer; transition: border-color 0.2s;
+}
+.drop-zone:hover, .drop-zone.drag-over { border-color: #58a6ff; background: rgba(88,166,255,0.05); }
+.drop-zone .hint { color: #484f58; font-size: 12px; margin-top: 6px; }
+
+/* 结果框 */
+.result-box { background: #0d1117; border: 1px solid #30363d; border-radius: 8px; padding: 14px; }
+.ticket-display {
+  background: #0d1117; border: 1px solid #21262d; border-radius: 4px; padding: 8px;
+  font-family: monospace; font-size: 11px; color: #58a6ff; word-break: break-all;
+  max-height: 80px; overflow-y: auto; margin: 8px 0;
+}
+.error-box { background: rgba(248,81,73,0.1); border: 1px solid #f85149; border-radius: 8px; padding: 14px; color: #f85149; }
+
+/* 接收区 */
+.ticket-input {
+  width: 100%; background: #0d1117; border: 1px solid #30363d; border-radius: 6px;
+  padding: 10px; color: #c9d1d9; font-family: monospace; font-size: 12px;
+  resize: vertical; min-height: 60px;
+}
+.save-path-row { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.save-path-input {
+  flex: 1; background: #0d1117; border: 1px solid #30363d; border-radius: 6px;
+  padding: 8px; color: #c9d1d9; font-size: 13px;
+}
+
+/* 传输历史 */
+.history-panel {
+  background: #161b22; border-top: 1px solid #30363d; padding: 12px 20px;
+  max-height: 150px; overflow-y: auto;
+}
+.history-panel h2 { font-size: 14px; color: #8b949e; margin-bottom: 8px; }
+.history-list { display: flex; gap: 12px; flex-wrap: wrap; }
+.history-item { background: #0d1117; border: 1px solid #21262d; border-radius: 6px; padding: 8px 12px; font-size: 12px; }
