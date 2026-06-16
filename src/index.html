@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>iroh-transfer</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="app">
+    <!-- 节点状态栏 -->
+    <div class="status-bar">
+      <span class="status-icon" id="node-status-icon">🔴</span>
+      <span id="node-status">节点未启动</span>
+      <span id="node-id" class="node-id"></span>
+      <button id="btn-start-node" class="btn">启动节点</button>
+    </div>
+
+    <!-- 主内容区 -->
+    <div class="main-content">
+      <!-- 发送区 -->
+      <div class="panel send-panel">
+        <h2>📤 发送文件</h2>
+        <div id="drop-zone" class="drop-zone">
+          <p>拖拽文件到这里</p>
+          <p class="hint">或点击选择文件</p>
+          <input type="file" id="file-input" hidden>
+        </div>
+        <div id="send-result" class="result-box" style="display:none">
+          <p><strong>文件：</strong><span id="send-file-name"></span></p>
+          <p><strong>大小：</strong><span id="send-file-size"></span></p>
+          <p><strong>票据：</strong></p>
+          <div id="ticket-display" class="ticket-display"></div>
+          <button id="btn-copy-ticket" class="btn btn-primary">复制票据</button>
+        </div>
+      </div>
+
+      <!-- 接收区 -->
+      <div class="panel receive-panel">
+        <h2>📥 接收文件</h2>
+        <textarea id="ticket-input" class="ticket-input" placeholder="粘贴票据到这里"></textarea>
+        <div class="save-path-row">
+          <span>保存到：</span>
+          <input id="save-path" class="save-path-input" value="/tmp/received-file">
+          <button id="btn-select-dir" class="btn">选择目录</button>
+        </div>
+        <button id="btn-receive" class="btn btn-primary">接收文件</button>
+        <div id="receive-result" class="result-box" style="display:none">
+          <p id="receive-status"></p>
+        </div>
+      </div>
+    </div>
+
+    <!-- 传输历史 -->
+    <div class="history-panel">
+      <h2>传输历史</h2>
+      <div id="transfer-history" class="history-list"></div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
