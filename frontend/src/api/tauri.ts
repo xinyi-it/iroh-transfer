@@ -12,6 +12,10 @@ export function invoke<T = string>(cmd: string, args?: Record<string, unknown>):
   return window.__TAURI_INTERNALS__.invoke(cmd, args) as Promise<T>
 }
 
+export function listen<T = unknown>(event: string, handler: (event: T) => void): Promise<() => void> {
+  return window.__TAURI_INTERNALS__.listen(event, (e: { payload: unknown }) => handler(e.payload as T))
+}
+
 // 类型定义
 export interface SendFileResult {
   ticket: string
@@ -20,10 +24,10 @@ export interface SendFileResult {
   file_size: number
 }
 
-export interface DownloadStatus {
-  status: 'idle' | 'downloading' | 'completed' | 'failed'
-  blob_hash: string
+export interface DownloadProgress {
+  status: 'downloading' | 'completed' | 'failed'
   downloaded_size: number
-  base_size: number
+  total_size: number
+  save_path?: string
   error?: string
 }
