@@ -64,7 +64,8 @@ body {
 .save-path-input {
   flex: 1; background: #0d1117; border: 1px solid #30363d; border-radius: 6px;
   padding: 8px; color: #c9d1d9; font-size: 13px;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  min-height: 54px; max-height: 120px;
+  overflow-y: auto; word-break: break-all;
 }
 
 /* 传输历史 */
