@@ -61,9 +61,10 @@
     </div>
   </div>
 
-  <script type="module">
-    import { invoke } from '../node_modules/@tauri-apps/api/core.js';
-    
+  <script>
+    // Tauri 2.x 内置 IPC，无需 npm 包
+    const invoke = window.__TAURI_INTERNALS__.invoke;
+
     // 传输历史
     const history = [];
 

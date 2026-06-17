@@ -32,7 +32,14 @@ fn get_iroh_path() -> Result<String, String> {
             }
         }
     }
-    // 3. 系统PATH
+    // 3. cargo install路径 (~/.cargo/bin/iroh)
+    if let Ok(home) = std::env::var("HOME") {
+        let cargo_bin = std::path::PathBuf::from(&home).join(".cargo").join("bin").join("iroh");
+        if cargo_bin.exists() {
+            return Ok(cargo_bin.to_string_lossy().to_string());
+        }
+    }
+    // 4. 系统PATH
     let output = std::process::Command::new("which")
         .arg("iroh")
         .output()
@@ -96,9 +103,9 @@ fn stop_node(state: State<AppState>) -> Result<(), String> {
     let iroh_path = get_iroh_path()?;
     
     std::process::Command::new(&iroh_path)
-        .args(["stop"])
+        .args(["shutdown"])
         .output()
-        .map_err(|e| format!("执行iroh stop失败: {}", e))?;
+        .map_err(|e| format!("执行iroh shutdown失败: {}", e))?;
     
     let mut node = state.iroh_node.lock().map_err(|e| e.to_string())?;
     node.node_id = None;
