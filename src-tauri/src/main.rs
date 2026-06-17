@@ -141,6 +141,7 @@ fn send_file(file_path: String, state: State<AppState>) -> Result<serde_json::Va
         .last()
         .unwrap_or("downloaded")
         .to_string();
+    let file_size = std::fs::metadata(&file_path).map(|m| m.len()).unwrap_or(0);
     let node_id = state
         .iroh_node
         .lock()
@@ -152,7 +153,17 @@ fn send_file(file_path: String, state: State<AppState>) -> Result<serde_json::Va
         "blob_id": blob_id,
         "ticket": ticket,
         "file_name": file_name,
-        "node_id": node_id
+        "node_id": node_id,
+        "file_size": file_size
+    }))
+}
+
+#[tauri::command]
+fn check_download_progress(file_path: String) -> Result<serde_json::Value, String> {
+    let metadata = std::fs::metadata(&file_path).map_err(|e| format!("无法读取文件: {}", e))?;
+    Ok(serde_json::json!({
+        "size": metadata.len(),
+        "exists": true
     }))
 }
 
@@ -225,7 +236,8 @@ fn main() {
             start_node,
             stop_node,
             send_file,
-            receive_file
+            receive_file,
+            check_download_progress
         ])
         .setup(|_app| Ok(()))
         .run(tauri::generate_context!())
