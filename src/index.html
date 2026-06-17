@@ -4,42 +4,6 @@
   <meta charset="UTF-8">
   <title>iroh-transfer</title>
   <link rel="stylesheet" href="style.css">
-  <style>
-    .progress-bar-container {
-      width: 100%;
-      height: 8px;
-      background: #21262d;
-      border-radius: 4px;
-      margin-top: 8px;
-      overflow: hidden;
-      display: none;
-    }
-    .progress-bar-container.active {
-      display: block;
-    }
-    .progress-bar {
-      height: 100%;
-      background: linear-gradient(90deg, #1f6feb, #58a6ff);
-      border-radius: 4px;
-      transition: width 0.3s ease;
-      width: 0%;
-    }
-    .progress-bar.indeterminate {
-      width: 30%;
-      animation: indeterminate 1.5s infinite ease-in-out;
-    }
-    @keyframes indeterminate {
-      0% { margin-left: -30%; }
-      100% { margin-left: 100%; }
-    }
-    .progress-message {
-      font-size: 13px;
-      color: #8b949e;
-      margin-top: 6px;
-    }
-    .progress-message.success { color: #3fb950; }
-    .progress-message.error { color: #f85149; }
-  </style>
 </head>
 <body>
   <div class="app">
@@ -81,7 +45,7 @@
         <button id="btn-receive" class="btn btn-primary">接收文件</button>
         <!-- 进度区域 -->
         <div id="progress-area" style="display:none; margin-top:8px;">
-          <div class="progress-bar-container active" id="progress-bar-container">
+          <div class="progress-bar-container" id="progress-bar-container">
             <div class="progress-bar indeterminate" id="progress-bar"></div>
           </div>
           <div class="progress-message" id="progress-message">正在连接...</div>
@@ -180,7 +144,6 @@
     const receiveStatus = document.getElementById('receive-status');
     const progressArea = document.getElementById('progress-area');
     const progressBar = document.getElementById('progress-bar');
-    const progressBarContainer = document.getElementById('progress-bar-container');
     const progressMessage = document.getElementById('progress-message');
     let pureTicket = '';
 
@@ -194,22 +157,19 @@
 
       if (data.status === 'connecting') {
         progressBar.className = 'progress-bar indeterminate';
-        progressBarContainer.className = 'progress-bar-container active';
       } else if (data.status === 'downloading') {
         progressBar.className = 'progress-bar indeterminate';
-        progressBarContainer.className = 'progress-bar-container active';
       } else if (data.status === 'done') {
         progressBar.className = 'progress-bar';
         progressBar.style.width = '100%';
-        progressBarContainer.className = 'progress-bar-container active';
         progressMessage.className = 'progress-message success';
-        // 2秒后隐藏进度条
         setTimeout(() => {
           progressArea.style.display = 'none';
           progressBar.style.width = '0%';
         }, 2000);
       } else if (data.status === 'error') {
-        progressBarContainer.className = 'progress-bar-container';
+        progressBar.className = 'progress-bar';
+        progressBar.style.width = '0%';
         progressMessage.className = 'progress-message error';
       }
     });
@@ -261,7 +221,6 @@
       receiveResult.style.display = 'none';
       progressArea.style.display = 'block';
       progressBar.className = 'progress-bar indeterminate';
-      progressBarContainer.className = 'progress-bar-container active';
       progressMessage.textContent = '正在连接对方节点...';
       progressMessage.className = 'progress-message';
 
