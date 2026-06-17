@@ -163,7 +163,7 @@ import { ref, computed } from 'vue'
 import { UploadFilled, Loading, WarningFilled } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { invoke } from '../api/tauri'
-import type { SendFileResult, DownloadProgress } from '../api/tauri'
+import type { SendFileResult, DownloadStatus } from '../api/tauri'
 import { formatSize, parseTicketInput } from '../utils'
 import { useHistoryStore } from '../stores/history'
 
