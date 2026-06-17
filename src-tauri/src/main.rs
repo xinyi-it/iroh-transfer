@@ -171,36 +171,24 @@ fn send_file(file_path: String, state: State<AppState>) -> Result<serde_json::Va
 
 #[tauri::command]
 fn check_download_progress(file_path: String, blob_hash: Option<String>) -> Result<serde_json::Value, String> {
-    let iroh_path = get_iroh_path()?;
-
-    // 如果提供了blob_hash，查iroh blob列表获取已下载大小
-    let downloaded_size = if let Some(ref hash) = blob_hash {
-        if !hash.is_empty() {
-            let output = std::process::Command::new(&iroh_path)
-                .args(["blobs", "list", "blobs"])
-                .output()
-                .ok();
-            output.and_then(|o| {
-                let stdout = String::from_utf8_lossy(&o.stdout);
-                for line in stdout.lines() {
-                    if line.trim().starts_with(hash) {
-                        // 格式: hash (size)
-                        if let Some(start) = line.find('(') {
-                            if let Some(end) = line.find(')') {
-                                let size_str = &line[start+1..end];
-                                // 解析 "50.10 MiB" 或 "462.47 MiB" 或 "20 B"
-                                return parse_iroh_size(size_str);
-                            }
-                        }
-                    }
-                }
-                None
-            }).unwrap_or(0u64)
-        } else {
-            0
-        }
+    // 查iroh blobs数据目录总大小变化来估算下载进度
+    let iroh_data_dir = std::env::var("IROH_HOME_DIR")
+        .unwrap_or_else(|_| dirs::data_dir()
+            .map(|p| p.join("iroh").to_string_lossy().to_string())
+            .unwrap_or_else(|| "~/.local/share/iroh".to_string()));
+    let blobs_dir = std::path::Path::new(&iroh_data_dir).join("blobs");
+    let downloaded_size = if blobs_dir.exists() {
+        let output = std::process::Command::new("du")
+            .args(["-sb", &blobs_dir.to_string_lossy()])
+            .output()
+            .ok();
+        output.and_then(|o| {
+            let stdout = String::from_utf8_lossy(&o.stdout);
+            stdout.split_whitespace().next()
+                .and_then(|s| s.parse::<u64>().ok())
+        }).unwrap_or(0u64)
     } else {
-        0
+        0u64
     };
 
     let file_exists = std::path::Path::new(&file_path).exists();
@@ -215,21 +203,6 @@ fn check_download_progress(file_path: String, blob_hash: Option<String>) -> Resu
         "file_exists": file_exists,
         "file_size": file_size
     }))
-}
-
-fn parse_iroh_size(s: &str) -> Option<u64> {
-    let s = s.trim();
-    if s.ends_with(" GiB") {
-        s.replace(" GiB", "").parse::<f64>().ok().map(|v| (v * 1073741824.0) as u64)
-    } else if s.ends_with(" MiB") {
-        s.replace(" MiB", "").parse::<f64>().ok().map(|v| (v * 1048576.0) as u64)
-    } else if s.ends_with(" KiB") {
-        s.replace(" KiB", "").parse::<f64>().ok().map(|v| (v * 1024.0) as u64)
-    } else if s.ends_with(" B") {
-        s.replace(" B", "").parse::<u64>().ok()
-    } else {
-        None
-    }
 }
 
 #[tauri::command]

@@ -12,3 +12,4 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 rfd = "0.15"
 tokio = { version = "1.52.3", features = ["rt"] }
+dirs = "6.0.0"
