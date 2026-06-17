@@ -4,6 +4,42 @@
   <meta charset="UTF-8">
   <title>iroh-transfer</title>
   <link rel="stylesheet" href="style.css">
+  <style>
+    .progress-bar-container {
+      width: 100%;
+      height: 8px;
+      background: #21262d;
+      border-radius: 4px;
+      margin-top: 8px;
+      overflow: hidden;
+      display: none;
+    }
+    .progress-bar-container.active {
+      display: block;
+    }
+    .progress-bar {
+      height: 100%;
+      background: linear-gradient(90deg, #1f6feb, #58a6ff);
+      border-radius: 4px;
+      transition: width 0.3s ease;
+      width: 0%;
+    }
+    .progress-bar.indeterminate {
+      width: 30%;
+      animation: indeterminate 1.5s infinite ease-in-out;
+    }
+    @keyframes indeterminate {
+      0% { margin-left: -30%; }
+      100% { margin-left: 100%; }
+    }
+    .progress-message {
+      font-size: 13px;
+      color: #8b949e;
+      margin-top: 6px;
+    }
+    .progress-message.success { color: #3fb950; }
+    .progress-message.error { color: #f85149; }
+  </style>
 </head>
 <body>
   <div class="app">
@@ -43,6 +79,13 @@
           <input id="save-filename" class="save-path-input" value="" readonly style="color:#58a6ff" placeholder="自动识别文件名">
         </div>
         <button id="btn-receive" class="btn btn-primary">接收文件</button>
+        <!-- 进度区域 -->
+        <div id="progress-area" style="display:none; margin-top:8px;">
+          <div class="progress-bar-container active" id="progress-bar-container">
+            <div class="progress-bar indeterminate" id="progress-bar"></div>
+          </div>
+          <div class="progress-message" id="progress-message">正在连接...</div>
+        </div>
         <div id="receive-result" style="display:none">
           <div class="result-box">
             <p id="receive-status"></p>
@@ -93,8 +136,6 @@
     const sendFileSize = document.getElementById('send-file-size');
     const ticketDisplay = document.getElementById('ticket-display');
     const btnCopyTicket = document.getElementById('btn-copy-ticket');
-
-    // 存储当前发送的完整内容（文件名|票据）
     let currentSendContent = '';
 
     dropZone.addEventListener('click', async () => {
@@ -110,7 +151,6 @@
         const name = result.file_name || filePath.split('/').pop();
         sendFileName.textContent = name;
         sendFileSize.textContent = '...';
-        // 打包成 iroh://文件名|票据 格式
         currentSendContent = 'iroh://' + name + '|' + result.ticket;
         ticketDisplay.textContent = currentSendContent;
         sendResult.style.display = 'block';
@@ -138,22 +178,51 @@
     const btnReceive = document.getElementById('btn-receive');
     const receiveResult = document.getElementById('receive-result');
     const receiveStatus = document.getElementById('receive-status');
-
-    // 存储解析出的纯票据
+    const progressArea = document.getElementById('progress-area');
+    const progressBar = document.getElementById('progress-bar');
+    const progressBarContainer = document.getElementById('progress-bar-container');
+    const progressMessage = document.getElementById('progress-message');
     let pureTicket = '';
 
-    // 粘贴/输入时自动解析文件名
+    // 监听后端进度事件
+    const { listen } = window.__TAURI__.event;
+    listen('receive-progress', (event) => {
+      const data = event.payload;
+      progressArea.style.display = 'block';
+      progressMessage.textContent = data.message;
+      progressMessage.className = 'progress-message';
+
+      if (data.status === 'connecting') {
+        progressBar.className = 'progress-bar indeterminate';
+        progressBarContainer.className = 'progress-bar-container active';
+      } else if (data.status === 'downloading') {
+        progressBar.className = 'progress-bar indeterminate';
+        progressBarContainer.className = 'progress-bar-container active';
+      } else if (data.status === 'done') {
+        progressBar.className = 'progress-bar';
+        progressBar.style.width = '100%';
+        progressBarContainer.className = 'progress-bar-container active';
+        progressMessage.className = 'progress-message success';
+        // 2秒后隐藏进度条
+        setTimeout(() => {
+          progressArea.style.display = 'none';
+          progressBar.style.width = '0%';
+        }, 2000);
+      } else if (data.status === 'error') {
+        progressBarContainer.className = 'progress-bar-container';
+        progressMessage.className = 'progress-message error';
+      }
+    });
+
     ticketInput.addEventListener('input', () => {
       const text = ticketInput.value.trim();
       if (text.startsWith('iroh://') && text.includes('|')) {
-        // 格式: iroh://文件名|票据
-        const afterPrefix = text.substring(7); // 去掉 iroh://
+        const afterPrefix = text.substring(7);
         const pipeIdx = afterPrefix.indexOf('|');
         const filename = afterPrefix.substring(0, pipeIdx);
         pureTicket = afterPrefix.substring(pipeIdx + 1);
         saveFilenameInput.value = filename;
       } else if (text.includes('\n') && text.includes('票据')) {
-        // 兼容旧格式: 文件名: xxx\n票据: yyy
         const lines = text.split('\n');
         let filename = '';
         let ticket = '';
@@ -168,7 +237,6 @@
         if (filename) saveFilenameInput.value = filename;
         if (ticket) pureTicket = ticket;
       } else {
-        // 纯票据（没有文件名信息）
         pureTicket = text;
         saveFilenameInput.value = '';
       }
@@ -185,13 +253,17 @@
         return;
       }
 
-      // 拼接完整路径: ~/Downloads/文件名
       const home = await invoke('get_home_dir');
       const outPath = home + '/Downloads/' + filename;
 
       btnReceive.disabled = true;
       btnReceive.textContent = '接收中...';
       receiveResult.style.display = 'none';
+      progressArea.style.display = 'block';
+      progressBar.className = 'progress-bar indeterminate';
+      progressBarContainer.className = 'progress-bar-container active';
+      progressMessage.textContent = '正在连接对方节点...';
+      progressMessage.className = 'progress-message';
 
       try {
         const result = await invoke('receive_file', { ticket, savePath: outPath });
