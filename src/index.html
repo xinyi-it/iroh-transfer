@@ -85,6 +85,8 @@
     btnStartNode.addEventListener('click', async () => {
       btnStartNode.disabled = true;
       btnStartNode.textContent = '启动中...';
+      nodeStatusIcon.textContent = '🟡';
+      nodeStatus.textContent = '正在启动...';
       try {
         const id = await invoke('start_node');
         nodeStatusIcon.textContent = '🟢';

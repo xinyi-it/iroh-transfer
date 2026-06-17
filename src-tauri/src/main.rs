@@ -70,26 +70,37 @@ fn get_home_dir() -> Result<String, String> {
 }
 
 #[tauri::command]
-fn start_node(state: State<AppState>) -> Result<String, String> {
+async fn start_node(state: State<'_, AppState>) -> Result<String, String> {
     let iroh_path = get_iroh_path()?;
+    // 先启动iroh进程
     std::process::Command::new(&iroh_path)
         .args(["start"])
         .spawn()
         .map_err(|e| format!("启动iroh失败: {}", e))?;
-    std::thread::sleep(std::time::Duration::from_secs(3));
-    let id_output = std::process::Command::new(&iroh_path)
-        .args(["status"])
-        .output()
-        .map_err(|e| format!("获取节点状态失败: {}", e))?;
-    let stdout = String::from_utf8_lossy(&id_output.stdout);
-    let node_id = stdout
-        .lines()
-        .find(|l| l.starts_with("Node ID:"))
-        .map(|l| l.replace("Node ID:", "").trim().to_string())
-        .unwrap_or_default();
-    if node_id.is_empty() {
-        return Err("无法获取Node ID".to_string());
-    }
+
+    // 在子线程里轮询status，最多等15秒
+    let node_id = tokio::task::spawn_blocking(move || {
+        for _ in 0..15 {
+            std::thread::sleep(std::time::Duration::from_secs(1));
+            if let Ok(output) = std::process::Command::new(&iroh_path)
+                .args(["status"])
+                .output()
+            {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                if let Some(id) = stdout
+                    .lines()
+                    .find(|l| l.starts_with("Node ID:"))
+                    .map(|l| l.replace("Node ID:", "").trim().to_string())
+                {
+                    if !id.is_empty() {
+                        return Ok(id);
+                    }
+                }
+            }
+        }
+        Err("启动超时，请检查iroh是否正常".to_string())
+    }).await.map_err(|e| format!("任务执行失败: {}", e))??;
+
     let mut node = state.iroh_node.lock().map_err(|e| e.to_string())?;
     node.node_id = Some(node_id.clone());
     Ok(node_id)
