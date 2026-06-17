@@ -1,1 +1,8 @@
-node_modules/\ntarget/\n*.tar.gz\napp-icon.png\ngen-icon.js
+node_modules/
+target/
+*.tar.gz
+app-icon.png
+gen-icon.js
+src-tauri/binaries/
+src-tauri/gen/
+.DS_Store
