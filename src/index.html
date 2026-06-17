@@ -18,9 +18,10 @@
     <!-- 主内容 -->
     <div class="main-content">
       <!-- 发送面板 -->
-      <div class="panel">
+      <div class="panel" id="send-panel">
         <h2>📤 发送文件</h2>
-        <div id="drop-zone" class="drop-zone" style="cursor:pointer">
+        <div id="send-disabled-hint" class="disabled-hint">⚠️ 请先启动节点</div>
+        <div id="drop-zone" class="drop-zone disabled" style="cursor:not-allowed">
           <p>📂 点击选择文件</p>
           <p class="hint">弹出文件选择对话框</p>
         </div>
@@ -35,14 +36,15 @@
       </div>
 
       <!-- 接收面板 -->
-      <div class="panel">
+      <div class="panel" id="receive-panel">
         <h2>📥 接收文件</h2>
-        <textarea id="ticket-input" class="ticket-input" placeholder="粘贴对方发来的内容（含文件名+票据）..."></textarea>
+        <div id="receive-disabled-hint" class="disabled-hint">⚠️ 请先启动节点</div>
+        <textarea id="ticket-input" class="ticket-input disabled" placeholder="粘贴对方发来的内容（含文件名+票据）..." disabled></textarea>
         <div class="save-path-row">
           <span>保存为:</span>
           <input id="save-filename" class="save-path-input" value="" readonly style="color:#58a6ff" placeholder="自动识别文件名">
         </div>
-        <button id="btn-receive" class="btn btn-primary">接收文件</button>
+        <button id="btn-receive" class="btn btn-primary" disabled>接收文件</button>
         <!-- 进度区域 -->
         <div id="progress-area" style="display:none; margin-top:8px;">
           <div class="progress-bar-container" id="progress-bar-container">
@@ -76,6 +78,9 @@
     const nodeStatus = document.getElementById('node-status');
     const nodeId = document.getElementById('node-id');
     const btnStartNode = document.getElementById('btn-start-node');
+    const dropZone = document.getElementById('drop-zone');
+    const ticketInput = document.getElementById('ticket-input');
+    const btnReceive = document.getElementById('btn-receive');
 
     btnStartNode.addEventListener('click', async () => {
       btnStartNode.disabled = true;
@@ -86,6 +91,14 @@
         nodeStatus.textContent = '节点在线';
         nodeId.textContent = id.substring(0, 24) + '...';
         btnStartNode.style.display = 'none';
+        // 启用发送和接收
+        document.getElementById('send-disabled-hint').style.display = 'none';
+        dropZone.classList.remove('disabled');
+        dropZone.style.cursor = 'pointer';
+        document.getElementById('receive-disabled-hint').style.display = 'none';
+        ticketInput.classList.remove('disabled');
+        ticketInput.disabled = false;
+        btnReceive.disabled = false;
       } catch (e) {
         nodeStatus.textContent = '启动失败: ' + e;
         btnStartNode.disabled = false;
@@ -94,7 +107,6 @@
     });
 
     // === 发送文件 ===
-    const dropZone = document.getElementById('drop-zone');
     const sendResult = document.getElementById('send-result');
     const sendFileName = document.getElementById('send-file-name');
     const sendFileSize = document.getElementById('send-file-size');
@@ -137,9 +149,7 @@
     });
 
     // === 接收文件 ===
-    const ticketInput = document.getElementById('ticket-input');
     const saveFilenameInput = document.getElementById('save-filename');
-    const btnReceive = document.getElementById('btn-receive');
     const receiveResult = document.getElementById('receive-result');
     const receiveStatus = document.getElementById('receive-status');
     const progressArea = document.getElementById('progress-area');
