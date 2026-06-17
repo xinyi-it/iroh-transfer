@@ -82,8 +82,19 @@ fn send_file(file_path: String) -> Result<serde_json::Value, String> {
 fn receive_file(ticket: String, save_path: String) -> Result<String, String> {
     let iroh_path = get_iroh_path()?;
     let out_path = if std::path::Path::new(&save_path).exists() {
+        let stem = std::path::Path::new(&save_path).file_stem().and_then(|s| s.to_str()).unwrap_or("file");
+        let ext = std::path::Path::new(&save_path).extension().and_then(|s| s.to_str()).unwrap_or("");
+        let dir = std::path::Path::new(&save_path).parent().map(|p| p.to_string_lossy().to_string()).unwrap_or_default();
         let mut i = 1;
-        loop { let alt = format!("{}_{}", save_path, i); if !std::path::Path::new(&alt).exists() { break alt; } i += 1; }
+        loop {
+            let alt = if ext.is_empty() {
+                format!("{}/{}_{}", dir, stem, i)
+            } else {
+                format!("{}/{}_{}.{}", dir, stem, i, ext)
+            };
+            if !std::path::Path::new(&alt).exists() { break alt; }
+            i += 1;
+        }
     } else { save_path.clone() };
 
     let output = std::process::Command::new(&iroh_path).args(["blobs", "get", &ticket, "-o", &out_path]).output().map_err(|e| format!("blobs get失败: {}", e))?;
