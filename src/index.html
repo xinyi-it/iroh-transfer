@@ -127,7 +127,7 @@
         const name = result.file_name || filePath.split('/').pop();
         sendFileName.textContent = name;
         sendFileSize.textContent = '...';
-        currentSendContent = 'iroh://' + name + '|' + result.ticket;
+        currentSendContent = 'iroh://' + name + '|' + result.node_id + '|' + result.ticket;
         ticketDisplay.textContent = currentSendContent;
         sendResult.style.display = 'block';
         dropZone.innerHTML = '<p>✅ 上传完成</p><p class="hint">点击继续选择文件</p>';
@@ -200,14 +200,24 @@
       }
     }
 
+    let senderNodeId = '';
+
     ticketInput.addEventListener('input', () => {
       const text = ticketInput.value.trim();
+      senderNodeId = '';
       if (text.startsWith('iroh://') && text.includes('|')) {
         const afterPrefix = text.substring(7);
-        const pipeIdx = afterPrefix.indexOf('|');
-        const filename = afterPrefix.substring(0, pipeIdx);
-        pureTicket = afterPrefix.substring(pipeIdx + 1);
-        saveFilenameInput.value = filename;
+        const parts = afterPrefix.split('|');
+        if (parts.length >= 3) {
+          // 新格式: iroh://文件名|节点ID|票据
+          saveFilenameInput.value = parts[0];
+          senderNodeId = parts[1];
+          pureTicket = parts.slice(2).join('|');
+        } else if (parts.length === 2) {
+          // 旧格式: iroh://文件名|票据
+          saveFilenameInput.value = parts[0];
+          pureTicket = parts[1];
+        }
       } else if (text.includes('\n') && text.includes('票据')) {
         const lines = text.split('\n');
         let filename = '';
@@ -248,7 +258,7 @@
       startProgressPolling();
 
       try {
-        const result = await invoke('receive_file', { ticket, savePath: outPath });
+        const result = await invoke('receive_file', { ticket, savePath: outPath, nodeId: senderNodeId || null });
         stopProgressPolling(true, '✅ ' + result);
         receiveStatus.textContent = '✅ ' + result;
         receiveResult.style.display = 'block';
