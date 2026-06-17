@@ -147,10 +147,23 @@
     const progressMessage = document.getElementById('progress-message');
     let pureTicket = '';
 
-    // 监听后端进度事件
-    const { listen } = window.__TAURI__.event;
-    listen('receive-progress', (event) => {
-      const data = event.payload;
+    // 监听后端进度事件（Tauri 2.x内部API）
+    async function setupProgressListener() {
+      try {
+        // 优先用 __TAURI_INTERNALS__
+        const listen = window.__TAURI_INTERNALS__.listen || (window.__TAURI__ && window.__TAURI__.event && window.__TAURI__.event.listen);
+        if (listen) {
+          await listen('receive-progress', (event) => {
+            const data = event.payload;
+            updateProgress(data);
+          });
+        }
+      } catch (e) {
+        console.log('事件监听设置失败，使用轮询模式:', e);
+      }
+    }
+
+    function updateProgress(data) {
       progressArea.style.display = 'block';
       progressMessage.textContent = data.message;
       progressMessage.className = 'progress-message';
@@ -172,7 +185,9 @@
         progressBar.style.width = '0%';
         progressMessage.className = 'progress-message error';
       }
-    });
+    }
+
+    setupProgressListener();
 
     ticketInput.addEventListener('input', () => {
       const text = ticketInput.value.trim();
