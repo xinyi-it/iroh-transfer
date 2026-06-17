@@ -95,3 +95,6 @@ body {
 .progress-message { font-size: 13px; color: #8b949e; margin-top: 6px; }
 .progress-message.success { color: #3fb950; }
 .progress-message.error { color: #f85149; }
+.disabled-hint { color: #f0883e; font-size: 13px; margin-bottom: 8px; text-align: center; }
+.drop-zone.disabled { opacity: 0.4; pointer-events: none; }
+textarea.disabled { opacity: 0.4; }
