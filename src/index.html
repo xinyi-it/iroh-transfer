@@ -20,10 +20,9 @@
       <!-- 发送面板 -->
       <div class="panel">
         <h2>📤 发送文件</h2>
-        <div id="drop-zone" class="drop-zone">
-          <p>📂 拖拽文件到这里</p>
-          <p class="hint">或点击选择文件</p>
-          <input type="file" id="file-input" style="display:none">
+        <div id="drop-zone" class="drop-zone" style="cursor:pointer">
+          <p>📂 点击选择文件</p>
+          <p class="hint">弹出文件选择对话框</p>
         </div>
         <div id="send-result" style="display:none">
           <div class="result-box">
@@ -92,41 +91,34 @@
 
     // === 发送文件 ===
     const dropZone = document.getElementById('drop-zone');
-    const fileInput = document.getElementById('file-input');
     const sendResult = document.getElementById('send-result');
     const sendFileName = document.getElementById('send-file-name');
     const sendFileSize = document.getElementById('send-file-size');
     const ticketDisplay = document.getElementById('ticket-display');
     const btnCopyTicket = document.getElementById('btn-copy-ticket');
 
-    dropZone.addEventListener('click', () => fileInput.click());
-    fileInput.addEventListener('change', (e) => {
-      if (e.target.files.length > 0) handleSend(e.target.files[0]);
-    });
-
-    dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.classList.add('drag-over'); });
-    dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
-    dropZone.addEventListener('drop', (e) => {
-      e.preventDefault();
-      dropZone.classList.remove('drag-over');
-      if (e.dataTransfer.files.length > 0) handleSend(e.dataTransfer.files[0]);
-    });
-
-    async function handleSend(file) {
-      dropZone.innerHTML = '<p>⏳ 上传中...</p>';
+    dropZone.addEventListener('click', async () => {
+      dropZone.innerHTML = '<p>⏳ 选择文件中...</p>';
       try {
-        const result = await invoke('send_file', { filePath: file.path || file.name });
-        sendFileName.textContent = file.name;
-        sendFileSize.textContent = formatSize(file.size);
+        const filePath = await invoke('pick_file');
+        if (!filePath) {
+          dropZone.innerHTML = '<p>📂 点击选择文件</p><p class="hint">弹出文件选择对话框</p>';
+          return;
+        }
+        dropZone.innerHTML = '<p>⏳ 上传中...</p>';
+        const result = await invoke('send_file', { filePath });
+        const name = filePath.split('/').pop();
+        sendFileName.textContent = name;
+        sendFileSize.textContent = '...';
         ticketDisplay.textContent = result.ticket;
         sendResult.style.display = 'block';
-        dropZone.innerHTML = '<p>✅ 上传完成</p><p class="hint">可继续拖入文件</p>';
-        addHistory('发送', file.name, '成功');
+        dropZone.innerHTML = '<p>✅ 上传完成</p><p class="hint">点击继续选择文件</p>';
+        addHistory('发送', name, '成功');
       } catch (e) {
-        dropZone.innerHTML = '<p>❌ 上传失败: ' + e + '</p><p class="hint">重试请拖入文件</p>';
-        addHistory('发送', file.name, '失败');
+        dropZone.innerHTML = '<p>❌ 上传失败: ' + e + '</p><p class="hint">点击重试</p>';
+        addHistory('发送', '-', '失败');
       }
-    }
+    });
 
     btnCopyTicket.addEventListener('click', async () => {
       try {
@@ -149,15 +141,23 @@
       const ticket = ticketInput.value.trim();
       if (!ticket) { ticketInput.focus(); return; }
 
+      // 用Tauri对话框选择保存位置
+      let outPath = savePathInput.value;
+      if (!outPath || outPath.startsWith('~/')) {
+        // ~/Downloads/ → 用home目录展开
+        const home = await invoke('get_home_dir');
+        outPath = outPath.replace('~', home);
+      }
+
       btnReceive.disabled = true;
       btnReceive.textContent = '接收中...';
       receiveResult.style.display = 'none';
 
       try {
-        const result = await invoke('receive_file', { ticket, savePath: savePathInput.value });
+        const result = await invoke('receive_file', { ticket, savePath: outPath });
         receiveStatus.textContent = '✅ ' + result;
         receiveResult.style.display = 'block';
-        addHistory('接收', savePathInput.value.split('/').pop(), '成功');
+        addHistory('接收', outPath.split('/').pop(), '成功');
       } catch (e) {
         receiveStatus.textContent = '❌ ' + e;
         receiveResult.style.display = 'block';

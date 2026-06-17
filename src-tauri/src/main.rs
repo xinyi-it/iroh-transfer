@@ -61,6 +61,23 @@ fn get_iroh_binary_path() -> Result<String, String> {
     get_iroh_path()
 }
 
+// 弹出文件选择对话框，返回选中的文件路径
+#[tauri::command]
+fn pick_file() -> Result<Option<String>, String> {
+    // 用rfd弹出原生文件选择对话框
+    if let Some(path) = rfd::FileDialog::new().pick_file() {
+        Ok(Some(path.to_string_lossy().to_string()))
+    } else {
+        Ok(None)
+    }
+}
+
+// 获取用户home目录
+#[tauri::command]
+fn get_home_dir() -> Result<String, String> {
+    std::env::var("HOME").map_err(|e| format!("无法获取HOME: {}", e))
+}
+
 // 启动iroh节点
 #[tauri::command]
 fn start_node(state: State<AppState>) -> Result<String, String> {
@@ -209,6 +226,8 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             get_iroh_binary_path,
+            pick_file,
+            get_home_dir,
             start_node,
             stop_node,
             send_file,
