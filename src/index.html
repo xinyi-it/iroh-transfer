@@ -27,10 +27,9 @@
         <div id="send-result" style="display:none">
           <div class="result-box">
             <p>文件: <strong id="send-file-name"></strong> (<span id="send-file-size"></span>)</p>
-            <p style="margin-top:8px; color:#8b949e; font-size:13px;">将票据和文件名一起发给对方：</p>
-            <p style="color:#58a6ff; font-size:13px;">文件名: <strong id="send-file-name-copy"></strong></p>
+            <p style="margin-top:8px; color:#8b949e; font-size:13px;">把以下内容发给对方（含文件名+票据）：</p>
             <div id="ticket-display" class="ticket-display"></div>
-            <button id="btn-copy-ticket" class="btn">复制票据</button>
+            <button id="btn-copy-ticket" class="btn">复制发送内容</button>
           </div>
         </div>
       </div>
@@ -38,10 +37,10 @@
       <!-- 接收面板 -->
       <div class="panel">
         <h2>📥 接收文件</h2>
-        <textarea id="ticket-input" class="ticket-input" placeholder="粘贴对方发来的票据..."></textarea>
+        <textarea id="ticket-input" class="ticket-input" placeholder="粘贴对方发来的内容（含文件名+票据）..."></textarea>
         <div class="save-path-row">
-          <span>文件名:</span>
-          <input id="save-filename" class="save-path-input" value="" placeholder="输入保存的文件名（如photo.jpg）">
+          <span>保存为:</span>
+          <input id="save-filename" class="save-path-input" value="" readonly style="color:#58a6ff" placeholder="自动识别文件名">
         </div>
         <button id="btn-receive" class="btn btn-primary">接收文件</button>
         <div id="receive-result" style="display:none">
@@ -62,10 +61,7 @@
   </div>
 
   <script>
-    // Tauri 2.x 内置 IPC，无需 npm 包
     const invoke = window.__TAURI_INTERNALS__.invoke;
-
-    // 传输历史
     const history = [];
 
     // === 节点管理 ===
@@ -98,6 +94,9 @@
     const ticketDisplay = document.getElementById('ticket-display');
     const btnCopyTicket = document.getElementById('btn-copy-ticket');
 
+    // 存储当前发送的完整内容（文件名|票据）
+    let currentSendContent = '';
+
     dropZone.addEventListener('click', async () => {
       dropZone.innerHTML = '<p>⏳ 选择文件中...</p>';
       try {
@@ -108,11 +107,12 @@
         }
         dropZone.innerHTML = '<p>⏳ 上传中...</p>';
         const result = await invoke('send_file', { filePath });
-        const name = filePath.split('/').pop();
+        const name = result.file_name || filePath.split('/').pop();
         sendFileName.textContent = name;
         sendFileSize.textContent = '...';
-        document.getElementById('send-file-name-copy').textContent = name;
-        ticketDisplay.textContent = result.ticket;
+        // 打包成 iroh://文件名|票据 格式
+        currentSendContent = 'iroh://' + name + '|' + result.ticket;
+        ticketDisplay.textContent = currentSendContent;
         sendResult.style.display = 'block';
         dropZone.innerHTML = '<p>✅ 上传完成</p><p class="hint">点击继续选择文件</p>';
         addHistory('发送', name, '成功');
@@ -124,11 +124,9 @@
 
     btnCopyTicket.addEventListener('click', async () => {
       try {
-        const name = document.getElementById('send-file-name-copy').textContent;
-        const ticket = ticketDisplay.textContent;
-        await navigator.clipboard.writeText('文件名: ' + name + '\n票据: ' + ticket);
+        await navigator.clipboard.writeText(currentSendContent);
         btnCopyTicket.textContent = '已复制 ✓';
-        setTimeout(() => { btnCopyTicket.textContent = '复制票据和文件名'; }, 2000);
+        setTimeout(() => { btnCopyTicket.textContent = '复制发送内容'; }, 2000);
       } catch (e) {
         btnCopyTicket.textContent = '复制失败';
       }
@@ -141,13 +139,48 @@
     const receiveResult = document.getElementById('receive-result');
     const receiveStatus = document.getElementById('receive-status');
 
+    // 存储解析出的纯票据
+    let pureTicket = '';
+
+    // 粘贴/输入时自动解析文件名
+    ticketInput.addEventListener('input', () => {
+      const text = ticketInput.value.trim();
+      if (text.startsWith('iroh://') && text.includes('|')) {
+        // 格式: iroh://文件名|票据
+        const afterPrefix = text.substring(7); // 去掉 iroh://
+        const pipeIdx = afterPrefix.indexOf('|');
+        const filename = afterPrefix.substring(0, pipeIdx);
+        pureTicket = afterPrefix.substring(pipeIdx + 1);
+        saveFilenameInput.value = filename;
+      } else if (text.includes('\n') && text.includes('票据')) {
+        // 兼容旧格式: 文件名: xxx\n票据: yyy
+        const lines = text.split('\n');
+        let filename = '';
+        let ticket = '';
+        for (const line of lines) {
+          if (line.startsWith('文件名:') || line.startsWith('文件名：')) {
+            filename = line.replace(/文件名[:：]/, '').trim();
+          }
+          if (line.startsWith('票据:') || line.startsWith('票据：')) {
+            ticket = line.replace(/票据[:：]/, '').trim();
+          }
+        }
+        if (filename) saveFilenameInput.value = filename;
+        if (ticket) pureTicket = ticket;
+      } else {
+        // 纯票据（没有文件名信息）
+        pureTicket = text;
+        saveFilenameInput.value = '';
+      }
+    });
+
     btnReceive.addEventListener('click', async () => {
-      const ticket = ticketInput.value.trim();
+      const ticket = pureTicket || ticketInput.value.trim();
       if (!ticket) { ticketInput.focus(); return; }
 
       const filename = saveFilenameInput.value.trim();
       if (!filename) {
-        receiveStatus.textContent = '❌ 请输入保存的文件名（含扩展名，如photo.jpg）';
+        receiveStatus.textContent = '❌ 无法识别文件名，请让对方重新复制发送内容';
         receiveResult.style.display = 'block';
         return;
       }
