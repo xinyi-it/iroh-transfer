@@ -27,7 +27,8 @@
         <div id="send-result" style="display:none">
           <div class="result-box">
             <p>文件: <strong id="send-file-name"></strong> (<span id="send-file-size"></span>)</p>
-            <p style="margin-top:8px; color:#8b949e; font-size:13px;">将以下票据发送给对方：</p>
+            <p style="margin-top:8px; color:#8b949e; font-size:13px;">将票据和文件名一起发给对方：</p>
+            <p style="color:#58a6ff; font-size:13px;">文件名: <strong id="send-file-name-copy"></strong></p>
             <div id="ticket-display" class="ticket-display"></div>
             <button id="btn-copy-ticket" class="btn">复制票据</button>
           </div>
@@ -39,8 +40,8 @@
         <h2>📥 接收文件</h2>
         <textarea id="ticket-input" class="ticket-input" placeholder="粘贴对方发来的票据..."></textarea>
         <div class="save-path-row">
-          <span>保存到:</span>
-          <input id="save-path" class="save-path-input" value="~/Downloads/" placeholder="保存路径">
+          <span>文件名:</span>
+          <input id="save-filename" class="save-path-input" value="" placeholder="输入保存的文件名（如photo.jpg）">
         </div>
         <button id="btn-receive" class="btn btn-primary">接收文件</button>
         <div id="receive-result" style="display:none">
@@ -110,6 +111,7 @@
         const name = filePath.split('/').pop();
         sendFileName.textContent = name;
         sendFileSize.textContent = '...';
+        document.getElementById('send-file-name-copy').textContent = name;
         ticketDisplay.textContent = result.ticket;
         sendResult.style.display = 'block';
         dropZone.innerHTML = '<p>✅ 上传完成</p><p class="hint">点击继续选择文件</p>';
@@ -122,9 +124,11 @@
 
     btnCopyTicket.addEventListener('click', async () => {
       try {
-        await navigator.clipboard.writeText(ticketDisplay.textContent);
+        const name = document.getElementById('send-file-name-copy').textContent;
+        const ticket = ticketDisplay.textContent;
+        await navigator.clipboard.writeText('文件名: ' + name + '\n票据: ' + ticket);
         btnCopyTicket.textContent = '已复制 ✓';
-        setTimeout(() => { btnCopyTicket.textContent = '复制票据'; }, 2000);
+        setTimeout(() => { btnCopyTicket.textContent = '复制票据和文件名'; }, 2000);
       } catch (e) {
         btnCopyTicket.textContent = '复制失败';
       }
@@ -132,7 +136,7 @@
 
     // === 接收文件 ===
     const ticketInput = document.getElementById('ticket-input');
-    const savePathInput = document.getElementById('save-path');
+    const saveFilenameInput = document.getElementById('save-filename');
     const btnReceive = document.getElementById('btn-receive');
     const receiveResult = document.getElementById('receive-result');
     const receiveStatus = document.getElementById('receive-status');
@@ -141,13 +145,16 @@
       const ticket = ticketInput.value.trim();
       if (!ticket) { ticketInput.focus(); return; }
 
-      // 用Tauri对话框选择保存位置
-      let outPath = savePathInput.value;
-      if (!outPath || outPath.startsWith('~/')) {
-        // ~/Downloads/ → 用home目录展开
-        const home = await invoke('get_home_dir');
-        outPath = outPath.replace('~', home);
+      const filename = saveFilenameInput.value.trim();
+      if (!filename) {
+        receiveStatus.textContent = '❌ 请输入保存的文件名（含扩展名，如photo.jpg）';
+        receiveResult.style.display = 'block';
+        return;
       }
+
+      // 拼接完整路径: ~/Downloads/文件名
+      const home = await invoke('get_home_dir');
+      const outPath = home + '/Downloads/' + filename;
 
       btnReceive.disabled = true;
       btnReceive.textContent = '接收中...';
@@ -157,11 +164,11 @@
         const result = await invoke('receive_file', { ticket, savePath: outPath });
         receiveStatus.textContent = '✅ ' + result;
         receiveResult.style.display = 'block';
-        addHistory('接收', outPath.split('/').pop(), '成功');
+        addHistory('接收', filename, '成功');
       } catch (e) {
         receiveStatus.textContent = '❌ ' + e;
         receiveResult.style.display = 'block';
-        addHistory('接收', '-', '失败');
+        addHistory('接收', filename, '失败');
       } finally {
         btnReceive.disabled = false;
         btnReceive.textContent = '接收文件';
