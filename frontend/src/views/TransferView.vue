@@ -1,5 +1,33 @@
 <template>
   <div class="app-container">
+    <!-- 依赖缺失提示 -->
+    <el-alert
+      v-if="depChecked && !irohFound"
+      type="error"
+      :closable="false"
+      show-icon
+      style="margin-bottom: 16px"
+    >
+      <template #title>
+        <span>缺少 iroh 依赖</span>
+      </template>
+      <div style="margin-top: 8px; white-space: pre-line; font-size: 13px">{{ installGuide }}</div>
+      <el-button type="primary" size="small" style="margin-top: 8px" @click="checkDeps">
+        重新检测
+      </el-button>
+    </el-alert>
+    <el-alert
+      v-if="depChecked && irohFound"
+      type="success"
+      :closable="true"
+      show-icon
+      style="margin-bottom: 16px"
+    >
+      <template #title>
+        <span>iroh 已就绪 {{ irohVersion }}</span>
+      </template>
+    </el-alert>
+
     <!-- 顶部状态栏 -->
     <el-header class="status-bar">
       <div class="status-left">
@@ -168,6 +196,35 @@ import { formatSize, parseTicketInput } from '../utils'
 import { useHistoryStore } from '../stores/history'
 
 const history = useHistoryStore()
+
+// === 依赖检测 ===
+const depChecked = ref(false)
+const irohFound = ref(false)
+const irohVersion = ref('')
+const cargoFound = ref(false)
+const installGuide = ref('')
+
+async function checkDeps() {
+  try {
+    const info = await invoke<{
+      iroh_found: boolean
+      iroh_path: string
+      iroh_version: string
+      cargo_found: boolean
+      install_guide: string
+    }>('check_dependencies')
+    irohFound.value = info.iroh_found
+    irohVersion.value = info.iroh_version
+    cargoFound.value = info.cargo_found
+    installGuide.value = info.install_guide
+  } catch {
+    irohFound.value = false
+  }
+  depChecked.value = true
+}
+
+// 页面加载时自动检测
+checkDeps()
 
 // === 节点状态 ===
 const nodeOnline = ref(false)

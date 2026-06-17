@@ -55,6 +55,58 @@ fn get_iroh_path() -> Result<String, String> {
 }
 
 #[tauri::command]
+fn check_dependencies() -> Result<serde_json::Value, String> {
+    let iroh_found = get_iroh_path().ok();
+    
+    // 检测cargo是否安装
+    let cargo_found = std::process::Command::new("cargo")
+        .arg("--version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    
+    // 检测iroh版本
+    let iroh_version = if let Some(ref path) = iroh_found {
+        std::process::Command::new(path)
+            .arg("--version")
+            .output()
+            .ok()
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+    } else {
+        None
+    };
+    
+    // 安装指引
+    let install_guide = if cfg!(target_os = "macos") {
+        if !cargo_found {
+            "1. 安装Rust: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh\n2. 安装iroh: cargo install iroh-cli"
+        } else {
+            "在终端运行: cargo install iroh-cli"
+        }
+    } else if cfg!(target_os = "windows") {
+        if !cargo_found {
+            "1. 安装Rust: 访问 https://rustup.rs 下载安装\n2. 安装iroh: cargo install iroh-cli"
+        } else {
+            "在终端运行: cargo install iroh-cli"
+        }
+    } else {
+        if !cargo_found {
+            "1. 安装Rust: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh\n2. 安装iroh: cargo install iroh-cli\n3. 安装依赖: sudo apt install build-essential pkg-config libssl-dev"
+        } else {
+            "在终端运行: cargo install iroh-cli"
+        }
+    };
+    
+    Ok(serde_json::json!({
+        "iroh_found": iroh_found.is_some(),
+        "iroh_path": iroh_found.unwrap_or_default(),
+        "iroh_version": iroh_version.unwrap_or_default(),
+        "cargo_found": cargo_found,
+        "install_guide": install_guide
+    }))
+}
+
+#[tauri::command]
 fn get_iroh_binary_path() -> Result<String, String> {
     get_iroh_path()
 }
@@ -366,6 +418,7 @@ fn main() {
             download_base_size: Mutex::new(0),
         })
         .invoke_handler(tauri::generate_handler![
+            check_dependencies,
             get_iroh_binary_path,
             pick_file,
             get_home_dir,
