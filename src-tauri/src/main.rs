@@ -13,25 +13,51 @@ struct AppState {
     iroh_node: Mutex<IrohNode>,
 }
 
-// 获取内置iroh二进制路径
-fn get_iroh_path(app: &tauri::AppHandle) -> Result<String, String> {
-    let resource_path = app.path()
-        .resource_dir()
-        .map_err(|e| e.to_string())?;
-    let iroh_path = resource_path.join("binaries").join("iroh");
-    Ok(iroh_path.to_string_lossy().to_string())
+// 获取iroh二进制路径（优先环境变量，再找PATH）
+fn get_iroh_path() -> Result<String, String> {
+    // 1. 环境变量指定
+    if let Ok(path) = std::env::var("IROH_PATH") {
+        if std::path::Path::new(&path).exists() {
+            return Ok(path);
+        }
+    }
+    // 2. 内置binaries目录
+    if let Ok(exe_dir) = std::env::current_exe() {
+        let bin_path = exe_dir.parent()
+            .and_then(|p| p.parent())
+            .map(|p| p.join("binaries").join("iroh"));
+        if let Some(ref bp) = bin_path {
+            if bp.exists() {
+                return Ok(bp.to_string_lossy().to_string());
+            }
+        }
+    }
+    // 3. 系统PATH
+    let output = std::process::Command::new("which")
+        .arg("iroh")
+        .output()
+        .map_err(|e| format!("查找iroh失败: {}", e))?;
+    
+    if output.status.success() {
+        let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if !path.is_empty() {
+            return Ok(path);
+        }
+    }
+    
+    Err("未找到iroh，请先安装: cargo install iroh-cli 或从 https://iroh.computer 下载".to_string())
 }
 
 // 获取iroh路径（暴露给前端）
 #[tauri::command]
-fn get_iroh_binary_path(app: tauri::AppHandle) -> Result<String, String> {
-    get_iroh_path(&app)
+fn get_iroh_binary_path() -> Result<String, String> {
+    get_iroh_path()
 }
 
 // 启动iroh节点
 #[tauri::command]
-fn start_node(app: tauri::AppHandle, state: State<AppState>) -> Result<String, String> {
-    let iroh_path = get_iroh_path(&app)?;
+fn start_node(state: State<AppState>) -> Result<String, String> {
+    let iroh_path = get_iroh_path()?;
     
     // 启动iroh节点（后台运行）
     let output = std::process::Command::new(&iroh_path)
@@ -67,8 +93,8 @@ fn start_node(app: tauri::AppHandle, state: State<AppState>) -> Result<String, S
 
 // 停止iroh节点
 #[tauri::command]
-fn stop_node(app: tauri::AppHandle, state: State<AppState>) -> Result<(), String> {
-    let iroh_path = get_iroh_path(&app)?;
+fn stop_node(state: State<AppState>) -> Result<(), String> {
+    let iroh_path = get_iroh_path()?;
     
     std::process::Command::new(&iroh_path)
         .args(["stop"])
@@ -83,8 +109,8 @@ fn stop_node(app: tauri::AppHandle, state: State<AppState>) -> Result<(), String
 
 // 发送文件
 #[tauri::command]
-fn send_file(app: tauri::AppHandle, file_path: String) -> Result<serde_json::Value, String> {
-    let iroh_path = get_iroh_path(&app)?;
+fn send_file(file_path: String) -> Result<serde_json::Value, String> {
+    let iroh_path = get_iroh_path()?;
     
     let output = std::process::Command::new(&iroh_path)
         .args(["blobs", "add", &file_path])
@@ -124,8 +150,8 @@ fn send_file(app: tauri::AppHandle, file_path: String) -> Result<serde_json::Val
 
 // 接收文件
 #[tauri::command]
-fn receive_file(app: tauri::AppHandle, ticket: String, save_path: String) -> Result<String, String> {
-    let iroh_path = get_iroh_path(&app)?;
+fn receive_file(ticket: String, save_path: String) -> Result<String, String> {
+    let iroh_path = get_iroh_path()?;
     
     // Step 1: blobs get
     let get_output = std::process::Command::new(&iroh_path)
@@ -178,6 +204,15 @@ fn main() {
             send_file,
             receive_file,
         ])
+        .setup(|app| {
+            // 在开发模式下打开devtools
+            #[cfg(debug_assertions)]
+            {
+                let window = app.get_webview_window("main").unwrap();
+                window.open_devtools();
+            }
+            Ok(())
+        })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
