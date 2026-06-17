@@ -59,15 +59,14 @@ fn get_iroh_binary_path() -> Result<String, String> {
 fn start_node(state: State<AppState>) -> Result<String, String> {
     let iroh_path = get_iroh_path()?;
     
-    // 启动iroh节点（后台运行）
-    let output = std::process::Command::new(&iroh_path)
+    // 后台spawn启动iroh节点（不阻塞等待）
+    std::process::Command::new(&iroh_path)
         .args(["start"])
-        .output()
-        .map_err(|e| format!("执行iroh start失败: {}", e))?;
+        .spawn()
+        .map_err(|e| format!("启动iroh失败: {}", e))?;
     
-    if !output.status.success() {
-        return Err(format!("iroh start失败: {}", String::from_utf8_lossy(&output.stderr)));
-    }
+    // 等待节点启动
+    std::thread::sleep(std::time::Duration::from_secs(3));
     
     // 获取node id
     let id_output = std::process::Command::new(&iroh_path)
@@ -82,7 +81,7 @@ fn start_node(state: State<AppState>) -> Result<String, String> {
         .unwrap_or_default();
     
     if node_id.is_empty() {
-        return Err("无法获取Node ID".to_string());
+        return Err("无法获取Node ID，节点可能还在启动中，请稍后重试".to_string());
     }
     
     let mut node = state.iroh_node.lock().map_err(|e| e.to_string())?;
