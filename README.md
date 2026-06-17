@@ -21,8 +21,7 @@
 ## 安装与运行
 
 ```bash
-# 克隆仓库
-git clone https://github.com/你的用户名/iroh-transfer.git
+git clone https://github.com/xinyi-it/iroh-transfer.git
 cd iroh-transfer
 
 # 安装前端依赖
