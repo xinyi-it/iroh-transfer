@@ -162,11 +162,11 @@
 
     // 前端轮询真实下载进度
     let pollingPath = '';
-    let pollingBlobHash = '';
+    let baseBlobSize = 0; // 开始下载时iroh blobs目录大小
 
     function startProgressPolling(savePath, totalSize) {
       pollingPath = savePath;
-      pollingBlobHash = ''; // blobHash在download_blob返回后设置
+      baseBlobSize = 0; // 第一个轮询结果作为基准
       let seconds = 0;
       progressArea.style.display = 'block';
       progressBar.className = 'progress-bar indeterminate';
@@ -177,18 +177,24 @@
         seconds++;
         if (seconds % 2 === 0) {
           try {
-            const info = await invoke('check_download_progress', { filePath: pollingPath, blobHash: pollingBlobHash || null });
+            const info = await invoke('check_download_progress', { filePath: pollingPath, blobHash: null });
             // 文件已导出（第二步完成）
             if (info.file_exists && info.file_size > 0) {
               return;
             }
-            // 查iroh blob列表获取下载进度
-            if (totalSize > 0 && info.downloaded_size > 0) {
-              const pct = Math.min(Math.round(info.downloaded_size / totalSize * 100), 99);
-              progressBar.className = 'progress-bar';
-              progressBar.style.width = pct + '%';
-              progressMessage.textContent = '接收中... ' + formatSize(info.downloaded_size) + ' / ' + formatSize(totalSize) + ' (' + pct + '%)';
-              return;
+            // 用iroh blobs目录大小差值估算下载进度
+            if (info.downloaded_size > 0) {
+              if (baseBlobSize === 0) {
+                baseBlobSize = info.downloaded_size; // 记录基准大小
+              }
+              const downloaded = info.downloaded_size - baseBlobSize;
+              if (totalSize > 0 && downloaded > 0) {
+                const pct = Math.min(Math.round(downloaded / totalSize * 100), 99);
+                progressBar.className = 'progress-bar';
+                progressBar.style.width = pct + '%';
+                progressMessage.textContent = '接收中... ' + formatSize(downloaded) + ' / ' + formatSize(totalSize) + ' (' + pct + '%)';
+                return;
+              }
             }
           } catch(e) {}
         }
@@ -290,7 +296,6 @@
       try {
         // 第一步: 下载到iroh内部
         const blobHash = await invoke('download_blob', { ticket, nodeId: senderNodeId || null });
-        pollingBlobHash = blobHash; // 设置blobHash给进度轮询用
         // 第二步: 导出到文件
         const result = await invoke('export_blob', { blobHash, savePath: outPath });
         stopProgressPolling(true, '✅ ' + result);
