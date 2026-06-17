@@ -187,11 +187,11 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { UploadFilled, Loading, WarningFilled } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
-import { invoke } from '../api/tauri'
-import type { SendFileResult, DownloadStatus } from '../api/tauri'
+import { invoke, listen } from '../api/tauri'
+import type { SendFileResult, DownloadProgress } from '../api/tauri'
 import { formatSize, parseTicketInput } from '../utils'
 import { useHistoryStore } from '../stores/history'
 
@@ -295,8 +295,7 @@ const receiveSuccess = ref(false)
 let parsedNodeId = ''
 let parsedFileSize = 0
 let parsedTicket = ''
-let baseBlobSize = 0
-let progressTimer: ReturnType<typeof setInterval> | null = null
+let unlisten: (() => void) | null = null
 
 const canReceive = computed(() => nodeOnline.value && ticketInput.value.trim() && !receiving.value)
 
@@ -308,78 +307,47 @@ function onTicketInput() {
   parsedTicket = parsed.ticket
 }
 
-function startProgressPolling(totalSize: number) {
-  baseBlobSize = 0
-  showProgress.value = true
-  progressPercent.value = 0
-  progressStatus.value = ''
-  progressMsg.value = '正在连接对方节点...'
-  progressMsgClass.value = ''
-
-  progressTimer = setInterval(async () => {
-    try {
-      const info = await invoke<DownloadStatus>('check_download_status')
-      if (info.status === 'downloading') {
-        const downloaded = info.downloaded_size
-        if (totalSize > 0 && downloaded > 0) {
-          const pct = Math.min(Math.round(downloaded / totalSize * 100), 99)
-          progressPercent.value = pct
-          progressMsg.value = `接收中... ${formatSize(downloaded)} / ${formatSize(totalSize)} (${pct}%)`
-        } else {
-          progressMsg.value = '正在接收数据...'
-        }
-      } else if (info.status === 'completed') {
-        // 下载完成，停止轮询，执行导出
-        stopProgressPolling(false, '')
-        await doExport(info.blob_hash)
-      } else if (info.status === 'failed') {
-        stopProgressPolling(false, '❌ ' + (info.error || '下载失败'))
-        receiveMsg.value = '❌ ' + (info.error || '下载失败')
-        receiveSuccess.value = false
-        receiving.value = false
-        history.add('接收', saveFilename.value.trim(), '失败')
-      }
-    } catch { /* ignore */ }
-  }, 2000)
-}
-
-async function doExport(blobHash: string) {
-  const home = await invoke<string>('get_home_dir')
-  const outPath = home + '/Downloads/' + saveFilename.value.trim()
-  try {
-    const result = await invoke<string>('export_blob', {
-      blobHash,
-      savePath: outPath
-    })
-    stopProgressPolling(true, '✅ ' + result)
-    receiveMsg.value = '✅ ' + result
+function onDownloadProgress(info: DownloadProgress) {
+  if (info.status === 'downloading') {
+    const downloaded = info.downloaded_size
+    const total = info.total_size || parsedFileSize
+    if (total > 0 && downloaded > 0) {
+      const pct = Math.min(Math.round(downloaded / total * 100), 99)
+      progressPercent.value = pct
+      progressMsg.value = `接收中... ${formatSize(downloaded)} / ${formatSize(total)} (${pct}%)`
+    } else if (downloaded > 0) {
+      progressMsg.value = `接收中... ${formatSize(downloaded)}`
+    } else {
+      progressMsg.value = '正在连接对方节点...'
+    }
+  } else if (info.status === 'completed') {
+    progressPercent.value = 100
+    progressStatus.value = 'success'
+    progressMsg.value = '✅ 文件已保存到: ' + (info.save_path || 'Downloads')
+    progressMsgClass.value = 'success'
+    receiveMsg.value = progressMsg.value
     receiveSuccess.value = true
     receiving.value = false
     history.add('接收', saveFilename.value.trim(), '成功')
-  } catch (e: unknown) {
-    const msg = e instanceof Error ? e.message : String(e)
-    stopProgressPolling(false, '❌ 导出失败: ' + msg)
-    receiveMsg.value = '❌ 导出失败: ' + msg
+    setTimeout(() => { showProgress.value = false }, 3000)
+  } else if (info.status === 'failed') {
+    progressStatus.value = 'exception'
+    progressMsg.value = '❌ ' + (info.error || '下载失败')
+    progressMsgClass.value = 'error'
+    receiveMsg.value = progressMsg.value
     receiveSuccess.value = false
     receiving.value = false
     history.add('接收', saveFilename.value.trim(), '失败')
   }
 }
 
-function stopProgressPolling(success: boolean, message: string) {
-  if (progressTimer) { clearInterval(progressTimer); progressTimer = null }
-  if (success) {
-    progressPercent.value = 100
-    progressStatus.value = 'success'
-    progressMsg.value = message
-    progressMsgClass.value = 'success'
-    setTimeout(() => { showProgress.value = false }, 2000)
-  } else {
-    progressStatus.value = 'exception'
-    progressMsg.value = message
-    progressMsgClass.value = 'error'
-  }
-}
+onMounted(async () => {
+  unlisten = await listen<DownloadProgress>('download-progress', onDownloadProgress)
+})
+
+onUnmounted(() => {
+  if (unlisten) { unlisten(); unlisten = null }
+})
 
 function progressFormat(percentage: number) {
   return percentage + '%'
@@ -398,19 +366,27 @@ async function receiveFile() {
 
   receiving.value = true
   receiveMsg.value = ''
-  showProgress.value = false
+  showProgress.value = true
+  progressPercent.value = 0
+  progressStatus.value = ''
+  progressMsg.value = '正在连接对方节点...'
+  progressMsgClass.value = ''
 
   try {
-    // 非阻塞启动下载
+    const home = await invoke<string>('get_home_dir')
+    const savePath = home + '/Downloads/' + filename
+
     await invoke<string>('start_download', {
       ticket,
-      nodeId: parsedNodeId || null
+      nodeId: parsedNodeId || null,
+      savePath,
+      totalSize: parsedFileSize || 0
     })
-    // 启动进度轮询，轮询中自动处理完成/失败
-    startProgressPolling(parsedFileSize)
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e)
-    stopProgressPolling(false, '❌ ' + msg)
+    progressStatus.value = 'exception'
+    progressMsg.value = '❌ ' + msg
+    progressMsgClass.value = 'error'
     receiveMsg.value = '❌ ' + msg
     receiveSuccess.value = false
     receiving.value = false

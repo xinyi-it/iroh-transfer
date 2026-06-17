@@ -2,17 +2,24 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::sync::Mutex;
-use tauri::State;
-use std::process::Child;
+use std::str::FromStr;
+use tauri::{AppHandle, Emitter, State};
+use iroh::client::Iroh;
+use iroh::blobs::get::db::DownloadProgress;
+use iroh::blobs::get::progress::BlobProgress;
+use iroh::blobs::BlobFormat;
+use iroh::base::ticket::BlobTicket;
+use iroh::net::key::PublicKey;
+use iroh::client::blobs::{DownloadMode, DownloadOptions};
+use futures_lite::StreamExt;
 
 struct IrohNode {
     node_id: Option<String>,
 }
+
 struct AppState {
     iroh_node: Mutex<IrohNode>,
-    // 存储当前下载进程，用于非阻塞下载
-    download_process: Mutex<Option<Child>>,
-    download_base_size: Mutex<u64>,
+    download_active: Mutex<bool>,
 }
 
 fn get_iroh_path() -> Result<String, String> {
@@ -54,18 +61,37 @@ fn get_iroh_path() -> Result<String, String> {
     Err("未找到iroh，请先安装: cargo install iroh-cli".to_string())
 }
 
+async fn connect_iroh() -> Result<Iroh, String> {
+    // 获取iroh RPC地址
+    let iroh_path = get_iroh_path()?;
+    let output = std::process::Command::new(&iroh_path)
+        .args(["status"])
+        .env("https_proxy", std::env::var("https_proxy").unwrap_or_default())
+        .env("http_proxy", std::env::var("http_proxy").unwrap_or_default())
+        .env("all_proxy", std::env::var("all_proxy").unwrap_or_default())
+        .output()
+        .map_err(|e| format!("获取iroh状态失败: {}", e))?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // 解析 RPC Addr: 127.0.0.1:xxxx
+    let rpc_addr = stdout
+        .lines()
+        .find(|l| l.starts_with("RPC Addr:"))
+        .and_then(|l| l.split(':').nth(1).map(|s| s.trim()))
+        .and_then(|l| l.parse::<std::net::SocketAddr>().ok())
+        .ok_or("无法获取iroh RPC地址，请确认iroh已启动")?;
+    Iroh::connect_addr(rpc_addr).await.map_err(|e| format!("连接iroh节点失败: {}", e))
+}
+
 #[tauri::command]
 fn check_dependencies() -> Result<serde_json::Value, String> {
     let iroh_found = get_iroh_path().ok();
-    
-    // 检测cargo是否安装
+
     let cargo_found = std::process::Command::new("cargo")
         .arg("--version")
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false);
-    
-    // 检测iroh版本
+
     let iroh_version = if let Some(ref path) = iroh_found {
         std::process::Command::new(path)
             .arg("--version")
@@ -75,8 +101,7 @@ fn check_dependencies() -> Result<serde_json::Value, String> {
     } else {
         None
     };
-    
-    // 安装指引
+
     let install_guide = if cfg!(target_os = "macos") {
         if !cargo_found {
             "1. 安装Rust: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh\n2. 安装iroh: cargo install iroh-cli"
@@ -96,7 +121,7 @@ fn check_dependencies() -> Result<serde_json::Value, String> {
             "在终端运行: cargo install iroh-cli"
         }
     };
-    
+
     Ok(serde_json::json!({
         "iroh_found": iroh_found.is_some(),
         "iroh_path": iroh_found.unwrap_or_default(),
@@ -128,18 +153,54 @@ fn get_home_dir() -> Result<String, String> {
 #[tauri::command]
 async fn start_node(state: State<'_, AppState>) -> Result<String, String> {
     let iroh_path = get_iroh_path()?;
-    // 先启动iroh进程
+
+    // 先检查iroh是否已经在运行
+    if let Ok(output) = std::process::Command::new(&iroh_path)
+        .args(["status"])
+        .env("https_proxy", std::env::var("https_proxy").unwrap_or_default())
+        .env("http_proxy", std::env::var("http_proxy").unwrap_or_default())
+        .env("all_proxy", std::env::var("all_proxy").unwrap_or_default())
+        .output()
+    {
+        if output.status.success() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            if let Some(id) = stdout
+                .lines()
+                .find(|l| l.starts_with("Node ID:"))
+                .map(|l| l.replace("Node ID:", "").trim().to_string())
+            {
+                if !id.is_empty() {
+                    let mut node = state.iroh_node.lock().map_err(|e| e.to_string())?;
+                    node.node_id = Some(id.clone());
+                    return Ok(id);
+                }
+            }
+        }
+    }
+
+    // iroh未运行，先关闭可能残留的进程，再启动
+    let _ = std::process::Command::new(&iroh_path)
+        .args(["shutdown"])
+        .output();
+    std::thread::sleep(std::time::Duration::from_millis(500));
+
     std::process::Command::new(&iroh_path)
         .args(["start"])
+        .env("https_proxy", std::env::var("https_proxy").unwrap_or_default())
+        .env("http_proxy", std::env::var("http_proxy").unwrap_or_default())
+        .env("all_proxy", std::env::var("all_proxy").unwrap_or_default())
         .spawn()
         .map_err(|e| format!("启动iroh失败: {}", e))?;
 
-    // 在子线程里轮询status，最多等15秒
+    let iroh_path_clone = iroh_path.clone();
     let node_id = tokio::task::spawn_blocking(move || {
-        for _ in 0..15 {
+        for _ in 0..60 {
             std::thread::sleep(std::time::Duration::from_secs(1));
-            if let Ok(output) = std::process::Command::new(&iroh_path)
+            if let Ok(output) = std::process::Command::new(&iroh_path_clone)
                 .args(["status"])
+                .env("https_proxy", std::env::var("https_proxy").unwrap_or_default())
+                .env("http_proxy", std::env::var("http_proxy").unwrap_or_default())
+                .env("all_proxy", std::env::var("all_proxy").unwrap_or_default())
                 .output()
             {
                 let stdout = String::from_utf8_lossy(&output.stdout);
@@ -167,6 +228,9 @@ fn stop_node(state: State<AppState>) -> Result<(), String> {
     let iroh_path = get_iroh_path()?;
     std::process::Command::new(&iroh_path)
         .args(["shutdown"])
+        .env("https_proxy", std::env::var("https_proxy").unwrap_or_default())
+        .env("http_proxy", std::env::var("http_proxy").unwrap_or_default())
+        .env("all_proxy", std::env::var("all_proxy").unwrap_or_default())
         .output()
         .map_err(|e| format!("shutdown失败: {}", e))?;
     let mut node = state.iroh_node.lock().map_err(|e| e.to_string())?;
@@ -179,6 +243,9 @@ fn send_file(file_path: String, state: State<AppState>) -> Result<serde_json::Va
     let iroh_path = get_iroh_path()?;
     let output = std::process::Command::new(&iroh_path)
         .args(["blobs", "add", &file_path])
+        .env("https_proxy", std::env::var("https_proxy").unwrap_or_default())
+        .env("http_proxy", std::env::var("http_proxy").unwrap_or_default())
+        .env("all_proxy", std::env::var("all_proxy").unwrap_or_default())
         .output()
         .map_err(|e| format!("blobs add失败: {}", e))?;
     if !output.status.success() {
@@ -225,160 +292,31 @@ fn send_file(file_path: String, state: State<AppState>) -> Result<serde_json::Va
     }))
 }
 
-#[tauri::command]
-fn start_download(ticket: String, node_id: Option<String>, state: State<'_, AppState>) -> Result<String, String> {
-    let iroh_path = get_iroh_path()?;
-    
-    // 记录下载前blobs/data/目录里最新.data文件的大小作为基准
-    let iroh_data_dir = std::env::var("IROH_HOME_DIR")
-        .unwrap_or_else(|_| dirs::data_dir()
-            .map(|p| p.join("iroh").to_string_lossy().to_string())
-            .unwrap_or_else(|| "~/.local/share/iroh".to_string()));
-    let data_dir = std::path::Path::new(&iroh_data_dir).join("blobs").join("data");
-    let base_size = if data_dir.exists() {
-        if let Ok(entries) = std::fs::read_dir(&data_dir) {
-            let mut latest_time: std::time::SystemTime = std::time::UNIX_EPOCH;
-            let mut latest_sz: u64 = 0;
-            for entry in entries.flatten() {
-                if let Ok(meta) = entry.metadata() {
-                    if meta.modified().unwrap_or(std::time::UNIX_EPOCH) > latest_time {
-                        latest_time = meta.modified().unwrap_or(std::time::UNIX_EPOCH);
-                        latest_sz = meta.len();
-                    }
-                }
-            }
-            latest_sz
-        } else {
-            0u64
-        }
+/// 解析ticket字符串为BlobTicket
+fn parse_ticket(ticket_str: &str) -> Result<BlobTicket, String> {
+    // ticket可能是纯ticket，也可能是iroh://filename|nodeid|size|ticket格式
+    let ticket_part = if ticket_str.starts_with("iroh://") {
+        // 从iroh://格式中提取ticket部分（最后一个|后的内容）
+        ticket_str.rsplit_once('|').map(|(_, t)| t).unwrap_or(ticket_str)
     } else {
-        0u64
+        ticket_str
     };
-    *state.download_base_size.lock().unwrap() = base_size;
-    
-    // 非阻塞启动iroh blobs get进程
-    let mut cmd = std::process::Command::new(&iroh_path);
-    cmd.args(["blobs", "get", &ticket]);
-    if let Some(ref nid) = node_id {
-        if !nid.is_empty() {
-            cmd.args(["--node", nid]);
-        }
-    }
-    // stdout/stderr都pipe，避免子进程阻塞
-    cmd.stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped());
-    
-    let child = cmd.spawn().map_err(|e| format!("启动下载失败: {}", e))?;
-    *state.download_process.lock().unwrap() = Some(child);
-    
-    Ok("downloading".to_string())
+    BlobTicket::from_str(ticket_part)
+        .map_err(|e| format!("解析ticket失败: {}", e))
 }
 
-#[tauri::command]
-fn check_download_status(state: State<'_, AppState>) -> Result<serde_json::Value, String> {
-    let mut proc_lock = state.download_process.lock().unwrap();
-    let base_size = *state.download_base_size.lock().unwrap();
-    
-    if let Some(ref mut child) = *proc_lock {
-        // 检查进程是否结束（非阻塞）
-        match child.try_wait() {
-            Ok(Some(status)) => {
-                // 进程已结束，take出来获取输出
-                let child = proc_lock.take().unwrap();
-                let output = child.wait_with_output()
-                    .map_err(|e| format!("读取输出失败: {}", e))?;
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                let combined = format!("{}\n{}", stdout, stderr);
-                let blob_hash = combined
-                    .lines()
-                    .find(|l| l.starts_with("Fetching:"))
-                    .map(|l| l.replace("Fetching:", "").trim().to_string())
-                    .unwrap_or_default();
-                // proc_lock已经被take()清空了，不需要再设None
-                
-                if !status.success() {
-                    return Ok(serde_json::json!({
-                        "status": "failed",
-                        "error": format!("下载失败: {}", stderr),
-                        "blob_hash": "",
-                        "downloaded_size": 0,
-                        "base_size": base_size
-                    }));
-                }
-                
-                return Ok(serde_json::json!({
-                    "status": "completed",
-                    "blob_hash": blob_hash,
-                    "downloaded_size": 0,
-                    "base_size": base_size
-                }));
-            }
-            Ok(None) => {
-                // 还在下载中，查blobs/data/目录里最新.data文件的大小变化
-                let iroh_data_dir = std::env::var("IROH_HOME_DIR")
-                    .unwrap_or_else(|_| dirs::data_dir()
-                        .map(|p| p.join("iroh").to_string_lossy().to_string())
-                        .unwrap_or_else(|| "~/.local/share/iroh".to_string()));
-                let data_dir = std::path::Path::new(&iroh_data_dir).join("blobs").join("data");
-                let mut latest_size: u64 = 0;
-                if data_dir.exists() {
-                    if let Ok(entries) = std::fs::read_dir(&data_dir) {
-                        let mut latest_time: std::time::SystemTime = std::time::UNIX_EPOCH;
-                        for entry in entries.flatten() {
-                            if let Ok(meta) = entry.metadata() {
-                                if meta.modified().unwrap_or(std::time::UNIX_EPOCH) > latest_time {
-                                    latest_time = meta.modified().unwrap_or(std::time::UNIX_EPOCH);
-                                    latest_size = meta.len();
-                                }
-                            }
-                        }
-                    }
-                }
-                let downloaded = if latest_size > base_size { latest_size - base_size } else { 0 };
-                
-                return Ok(serde_json::json!({
-                    "status": "downloading",
-                    "blob_hash": "",
-                    "downloaded_size": downloaded,
-                    "base_size": base_size
-                }));
-            }
-            Err(e) => {
-                *proc_lock = None;
-                return Ok(serde_json::json!({
-                    "status": "failed",
-                    "error": format!("检查进程状态失败: {}", e),
-                    "blob_hash": "",
-                    "downloaded_size": 0,
-                    "base_size": base_size
-                }));
-            }
-        }
-    }
-    
-    // 没有下载进程
-    Ok(serde_json::json!({
-        "status": "idle",
-        "blob_hash": "",
-        "downloaded_size": 0,
-        "base_size": base_size
-    }))
-}
-
-#[tauri::command]
-fn export_blob(blob_hash: String, save_path: String) -> Result<String, String> {
-    let iroh_path = get_iroh_path()?;
-    let out_path = if std::path::Path::new(&save_path).exists() {
-        let stem = std::path::Path::new(&save_path)
+/// 计算不冲突的保存路径
+fn compute_save_path(save_path: &str) -> String {
+    if std::path::Path::new(save_path).exists() {
+        let stem = std::path::Path::new(save_path)
             .file_stem()
             .and_then(|s| s.to_str())
             .unwrap_or("file");
-        let ext = std::path::Path::new(&save_path)
+        let ext = std::path::Path::new(save_path)
             .extension()
             .and_then(|s| s.to_str())
             .unwrap_or("");
-        let dir = std::path::Path::new(&save_path)
+        let dir = std::path::Path::new(save_path)
             .parent()
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_default();
@@ -390,32 +328,237 @@ fn export_blob(blob_hash: String, save_path: String) -> Result<String, String> {
                 format!("{}/{}_{}.{}", dir, stem, i, ext)
             };
             if !std::path::Path::new(&alt).exists() {
-                break alt;
+                return alt;
             }
             i += 1;
         }
+    }
+    save_path.to_string()
+}
+
+#[tauri::command]
+async fn start_download(
+    ticket: String,
+    node_id: Option<String>,
+    save_path: String,
+    total_size: u64,
+    state: State<'_, AppState>,
+    app: AppHandle,
+) -> Result<String, String> {
+    // 标记下载开始
+    *state.download_active.lock().unwrap() = true;
+
+    let iroh = connect_iroh().await?;
+    let blob_ticket = parse_ticket(&ticket)?;
+    let (node_addr, hash, format) = blob_ticket.into_parts();
+
+    // 如果有额外的node_id参数，构建node_addr
+    let node_addr = if let Some(ref nid) = node_id {
+        if !nid.is_empty() {
+            match nid.parse::<PublicKey>() {
+                Ok(pk) => {
+                    // 使用ticket中的地址信息，但替换node_id
+                    iroh::net::NodeAddr::from_parts(pk, node_addr.info.relay_url, node_addr.info.direct_addresses)
+                }
+                Err(_) => node_addr,
+            }
+        } else {
+            node_addr
+        }
     } else {
-        save_path.clone()
+        node_addr
     };
 
-    let export_output = std::process::Command::new(&iroh_path)
-        .args(["blobs", "export", &blob_hash, &out_path])
-        .output()
-        .map_err(|e| format!("blobs export失败: {}", e))?;
+    let final_path = compute_save_path(&save_path);
 
-    if export_output.status.success() {
-        Ok(format!("文件已保存到: {}", out_path))
+    // 启动下载，获取带进度的stream
+    let mut stream = iroh.blobs()
+        .download_with_opts(
+            hash,
+            DownloadOptions {
+                format,
+                nodes: vec![node_addr],
+                tag: iroh::blobs::util::SetTagOption::Auto,
+                mode: DownloadMode::Direct,
+            },
+        )
+        .await
+        .map_err(|e| format!("启动下载失败: {}", e))?;
+
+    // 在后台任务中消费进度stream，通过Tauri事件推送
+    tokio::spawn(async move {
+        let mut downloaded_size: u64 = 0;
+        let mut blob_total_size: u64 = total_size;
+
+        while let Some(item) = stream.next().await {
+            match item {
+                Ok(progress) => match progress {
+                    DownloadProgress::InitialState(state) => {
+                        if state.connected {
+                            let _ = app.emit("download-progress", serde_json::json!({
+                                "status": "downloading",
+                                "downloaded_size": downloaded_size,
+                                "total_size": blob_total_size
+                            }));
+                        }
+                        if let Some(blob) = state.get_current() {
+                            if let Some(size) = blob.size {
+                                blob_total_size = size.value();
+                            }
+                            match blob.progress {
+                                BlobProgress::Progressing(offset) => {
+                                    downloaded_size = offset;
+                                }
+                                BlobProgress::Done => {
+                                    downloaded_size = blob_total_size;
+                                }
+                                BlobProgress::Pending => {}
+                            }
+                        }
+                        let _ = app.emit("download-progress", serde_json::json!({
+                            "status": "downloading",
+                            "downloaded_size": downloaded_size,
+                            "total_size": blob_total_size
+                        }));
+                    }
+                    DownloadProgress::Connected => {
+                        let _ = app.emit("download-progress", serde_json::json!({
+                            "status": "downloading",
+                            "downloaded_size": 0,
+                            "total_size": blob_total_size
+                        }));
+                    }
+                    DownloadProgress::FoundHashSeq { children, .. } => {
+                        blob_total_size = total_size.max(children as u64);
+                        let _ = app.emit("download-progress", serde_json::json!({
+                            "status": "downloading",
+                            "downloaded_size": downloaded_size,
+                            "total_size": blob_total_size
+                        }));
+                    }
+                    DownloadProgress::Found { size, .. } => {
+                        blob_total_size = size;
+                        let _ = app.emit("download-progress", serde_json::json!({
+                            "status": "downloading",
+                            "downloaded_size": 0,
+                            "total_size": blob_total_size
+                        }));
+                    }
+                    DownloadProgress::Progress { offset, .. } => {
+                        downloaded_size = offset;
+                        let _ = app.emit("download-progress", serde_json::json!({
+                            "status": "downloading",
+                            "downloaded_size": downloaded_size,
+                            "total_size": blob_total_size
+                        }));
+                    }
+                    DownloadProgress::FoundLocal { .. } => {}
+                    DownloadProgress::Abort(e) => {
+                        let _ = app.emit("download-progress", serde_json::json!({
+                            "status": "failed",
+                            "error": format!("下载中止: {}", e),
+                            "downloaded_size": downloaded_size,
+                            "total_size": blob_total_size
+                        }));
+                        return;
+                    }
+                    DownloadProgress::Done { .. } => {
+                        downloaded_size = blob_total_size;
+                        let _ = app.emit("download-progress", serde_json::json!({
+                            "status": "downloading",
+                            "downloaded_size": downloaded_size,
+                            "total_size": blob_total_size
+                        }));
+                    }
+                    DownloadProgress::AllDone(stats) => {
+                        downloaded_size = stats.bytes_read;
+                        // 下载完成，导出文件
+                        let export_result = export_downloaded_file(&iroh, hash, &final_path, format).await;
+                        match export_result {
+                            Ok(path) => {
+                                let _ = app.emit("download-progress", serde_json::json!({
+                                    "status": "completed",
+                                    "save_path": path,
+                                    "downloaded_size": downloaded_size,
+                                    "total_size": blob_total_size
+                                }));
+                            }
+                            Err(e) => {
+                                let _ = app.emit("download-progress", serde_json::json!({
+                                    "status": "failed",
+                                    "error": e,
+                                    "downloaded_size": downloaded_size,
+                                    "total_size": blob_total_size
+                                }));
+                            }
+                        }
+                        return;
+                    }
+                },
+                Err(e) => {
+                    let _ = app.emit("download-progress", serde_json::json!({
+                        "status": "failed",
+                        "error": format!("下载出错: {}", e),
+                        "downloaded_size": 0,
+                        "total_size": blob_total_size
+                    }));
+                    return;
+                }
+            }
+        }
+
+        // stream结束但没收到AllDone
+        let _ = app.emit("download-progress", serde_json::json!({
+            "status": "failed",
+            "error": "下载意外结束",
+            "downloaded_size": downloaded_size,
+            "total_size": blob_total_size
+        }));
+    });
+
+    Ok("downloading".to_string())
+}
+
+async fn export_downloaded_file(
+    iroh: &Iroh,
+    hash: iroh::blobs::Hash,
+    save_path: &str,
+    format: BlobFormat,
+) -> Result<String, String> {
+    use iroh::blobs::store::{ExportFormat, ExportMode};
+
+    let recursive = format == BlobFormat::HashSeq;
+    let export_format = if recursive {
+        ExportFormat::Collection
     } else {
-        Err(format!("导出失败: {}", String::from_utf8_lossy(&export_output.stderr)))
-    }
+        ExportFormat::Blob
+    };
+
+    let absolute = std::path::Path::new(save_path).to_path_buf();
+    let stream = iroh.blobs()
+        .export(hash, absolute.clone(), export_format, ExportMode::Copy)
+        .await
+        .map_err(|e| format!("导出失败: {}", e))?;
+
+    stream.await.map_err(|e| format!("导出写入失败: {}", e))?;
+    Ok(save_path.to_string())
+}
+
+#[tauri::command]
+fn check_download_status(state: State<'_, AppState>) -> Result<serde_json::Value, String> {
+    let active = *state.download_active.lock().unwrap();
+    Ok(serde_json::json!({
+        "status": if active { "downloading" } else { "idle" },
+        "downloaded_size": 0,
+        "total_size": 0
+    }))
 }
 
 fn main() {
     tauri::Builder::default()
         .manage(AppState {
             iroh_node: Mutex::new(IrohNode { node_id: None }),
-            download_process: Mutex::new(None),
-            download_base_size: Mutex::new(0),
+            download_active: Mutex::new(false),
         })
         .invoke_handler(tauri::generate_handler![
             check_dependencies,
@@ -426,8 +569,7 @@ fn main() {
             stop_node,
             send_file,
             start_download,
-            check_download_status,
-            export_blob
+            check_download_status
         ])
         .setup(|_app| Ok(()))
         .run(tauri::generate_context!())
