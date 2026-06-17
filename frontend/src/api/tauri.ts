@@ -20,8 +20,10 @@ export interface SendFileResult {
   file_size: number
 }
 
-export interface DownloadProgress {
+export interface DownloadStatus {
+  status: 'idle' | 'downloading' | 'completed' | 'failed'
+  blob_hash: string
   downloaded_size: number
-  file_exists: boolean
-  file_size: number
+  base_size: number
+  error?: string
 }
