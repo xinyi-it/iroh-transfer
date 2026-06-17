@@ -170,20 +170,38 @@ fn send_file(file_path: String, state: State<AppState>) -> Result<serde_json::Va
 }
 
 #[tauri::command]
-fn check_download_progress(file_path: String) -> Result<serde_json::Value, String> {
-    // 查iroh blobs目录总大小作为下载进度参考
-    let iroh_dir = std::env::var("HOME")
-        .map(|h| format!("{}/.local/share/iroh/blobs", h))
-        .unwrap_or_default();
-    let iroh_size = std::process::Command::new("du")
-        .args(["-sb", &iroh_dir])
-        .output()
-        .ok()
-        .and_then(|o| {
-            let out = String::from_utf8_lossy(&o.stdout);
-            out.split_whitespace().next().and_then(|s| s.parse::<u64>().ok())
-        })
-        .unwrap_or(0);
+fn check_download_progress(file_path: String, blob_hash: Option<String>) -> Result<serde_json::Value, String> {
+    let iroh_path = get_iroh_path()?;
+
+    // 如果提供了blob_hash，查iroh blob列表获取已下载大小
+    let downloaded_size = if let Some(ref hash) = blob_hash {
+        if !hash.is_empty() {
+            let output = std::process::Command::new(&iroh_path)
+                .args(["blobs", "list", "blobs"])
+                .output()
+                .ok();
+            output.and_then(|o| {
+                let stdout = String::from_utf8_lossy(&o.stdout);
+                for line in stdout.lines() {
+                    if line.trim().starts_with(hash) {
+                        // 格式: hash (size)
+                        if let Some(start) = line.find('(') {
+                            if let Some(end) = line.find(')') {
+                                let size_str = &line[start+1..end];
+                                // 解析 "50.10 MiB" 或 "462.47 MiB" 或 "20 B"
+                                return parse_iroh_size(size_str);
+                            }
+                        }
+                    }
+                }
+                None
+            }).unwrap_or(0u64)
+        } else {
+            0
+        }
+    } else {
+        0
+    };
 
     let file_exists = std::path::Path::new(&file_path).exists();
     let file_size = if file_exists {
@@ -193,14 +211,57 @@ fn check_download_progress(file_path: String) -> Result<serde_json::Value, Strin
     };
 
     Ok(serde_json::json!({
-        "iroh_store_size": iroh_size,
+        "downloaded_size": downloaded_size,
         "file_exists": file_exists,
         "file_size": file_size
     }))
 }
 
+fn parse_iroh_size(s: &str) -> Option<u64> {
+    let s = s.trim();
+    if s.ends_with(" GiB") {
+        s.replace(" GiB", "").parse::<f64>().ok().map(|v| (v * 1073741824.0) as u64)
+    } else if s.ends_with(" MiB") {
+        s.replace(" MiB", "").parse::<f64>().ok().map(|v| (v * 1048576.0) as u64)
+    } else if s.ends_with(" KiB") {
+        s.replace(" KiB", "").parse::<f64>().ok().map(|v| (v * 1024.0) as u64)
+    } else if s.ends_with(" B") {
+        s.replace(" B", "").parse::<u64>().ok()
+    } else {
+        None
+    }
+}
+
 #[tauri::command]
-async fn receive_file(ticket: String, save_path: String, node_id: Option<String>) -> Result<String, String> {
+async fn download_blob(ticket: String, node_id: Option<String>) -> Result<String, String> {
+    let iroh_path = get_iroh_path()?;
+    tokio::task::spawn_blocking(move || {
+        let mut cmd = std::process::Command::new(&iroh_path);
+        cmd.args(["blobs", "get", &ticket]);
+        if let Some(ref nid) = node_id {
+            if !nid.is_empty() {
+                cmd.args(["--node", nid]);
+            }
+        }
+        let output = cmd.output().map_err(|e| format!("blobs get失败: {}", e))?;
+        if !output.status.success() {
+            return Err(format!("下载失败: {}", String::from_utf8_lossy(&output.stderr)));
+        }
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let blob_hash = stdout
+            .lines()
+            .find(|l| l.starts_with("Fetching:"))
+            .map(|l| l.replace("Fetching:", "").trim().to_string())
+            .unwrap_or_default();
+        if blob_hash.is_empty() {
+            return Err("无法解析blob hash".to_string());
+        }
+        Ok(blob_hash)
+    }).await.map_err(|e| format!("任务执行失败: {}", e))?
+}
+
+#[tauri::command]
+fn export_blob(blob_hash: String, save_path: String) -> Result<String, String> {
     let iroh_path = get_iroh_path()?;
     let out_path = if std::path::Path::new(&save_path).exists() {
         let stem = std::path::Path::new(&save_path)
@@ -231,44 +292,16 @@ async fn receive_file(ticket: String, save_path: String, node_id: Option<String>
         save_path.clone()
     };
 
-    tokio::task::spawn_blocking(move || {
-        // 第一步: blobs get 下载到iroh内部数据库
-        let mut cmd = std::process::Command::new(&iroh_path);
-        cmd.args(["blobs", "get", &ticket]);
-        if let Some(ref nid) = node_id {
-            if !nid.is_empty() {
-                cmd.args(["--node", nid]);
-            }
-        }
-        let output = cmd.output().map_err(|e| format!("blobs get失败: {}", e))?;
-        if !output.status.success() {
-            return Err(format!("下载失败: {}", String::from_utf8_lossy(&output.stderr)));
-        }
+    let export_output = std::process::Command::new(&iroh_path)
+        .args(["blobs", "export", &blob_hash, &out_path])
+        .output()
+        .map_err(|e| format!("blobs export失败: {}", e))?;
 
-        // 解析blob hash
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let blob_hash = stdout
-            .lines()
-            .find(|l| l.starts_with("Fetching:"))
-            .map(|l| l.replace("Fetching:", "").trim().to_string())
-            .unwrap_or_default();
-
-        // 第二步: blobs export 导出到文件
-        let export_output = std::process::Command::new(&iroh_path)
-            .args(["blobs", "export", &blob_hash, &out_path])
-            .output()
-            .map_err(|e| format!("blobs export失败: {}", e))?;
-
-        if export_output.status.success() {
-            let transferred = stdout
-                .lines()
-                .find(|l| l.starts_with("Transferred"))
-                .unwrap_or("");
-            Ok(format!("文件已保存到: {} {}", out_path, transferred))
-        } else {
-            Err(format!("导出失败: {}", String::from_utf8_lossy(&export_output.stderr)))
-        }
-    }).await.map_err(|e| format!("任务执行失败: {}", e))?
+    if export_output.status.success() {
+        Ok(format!("文件已保存到: {}", out_path))
+    } else {
+        Err(format!("导出失败: {}", String::from_utf8_lossy(&export_output.stderr)))
+    }
 }
 
 fn main() {
@@ -283,7 +316,8 @@ fn main() {
             start_node,
             stop_node,
             send_file,
-            receive_file,
+            download_blob,
+            export_blob,
             check_download_progress
         ])
         .setup(|_app| Ok(()))
