@@ -217,11 +217,14 @@ async fn download_blob(ticket: String, node_id: Option<String>) -> Result<String
             }
         }
         let output = cmd.output().map_err(|e| format!("blobs get失败: {}", e))?;
-        if !output.status.success() {
-            return Err(format!("下载失败: {}", String::from_utf8_lossy(&output.stderr)));
-        }
+        // iroh把Fetching输出到stderr，所以stdout+stderr都要搜
         let stdout = String::from_utf8_lossy(&output.stdout);
-        let blob_hash = stdout
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let combined = format!("{}\n{}", stdout, stderr);
+        if !output.status.success() {
+            return Err(format!("下载失败: {}", stderr));
+        }
+        let blob_hash = combined
             .lines()
             .find(|l| l.starts_with("Fetching:"))
             .map(|l| l.replace("Fetching:", "").trim().to_string())
