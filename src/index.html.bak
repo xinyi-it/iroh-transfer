@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>iroh-transfer</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="app">
+    <!-- 状态栏 -->
+    <div class="status-bar">
+      <span id="node-status-icon">🔴</span>
+      <span id="node-status">节点离线</span>
+      <span id="node-id" class="node-id"></span>
+      <button id="btn-start-node" class="btn btn-primary">启动节点</button>
+    </div>
+
+    <!-- 主内容 -->
+    <div class="main-content">
+      <!-- 发送面板 -->
+      <div class="panel" id="send-panel">
+        <h2>📤 发送文件</h2>
+        <div id="send-disabled-hint" class="disabled-hint">⚠️ 请先启动节点</div>
+        <div id="drop-zone" class="drop-zone disabled" style="cursor:not-allowed">
+          <p>📂 点击选择文件</p>
+          <p class="hint">弹出文件选择对话框</p>
+        </div>
+        <div id="send-result" style="display:none">
+          <div class="result-box">
+            <p>文件: <strong id="send-file-name"></strong> (<span id="send-file-size"></span>)</p>
+            <p style="margin-top:8px; color:#8b949e; font-size:13px;">把以下内容发给对方（含文件名+票据）：</p>
+            <div id="ticket-display" class="ticket-display"></div>
+            <button id="btn-copy-ticket" class="btn">复制发送内容</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 接收面板 -->
+      <div class="panel" id="receive-panel">
+        <h2>📥 接收文件</h2>
+        <div id="receive-disabled-hint" class="disabled-hint">⚠️ 请先启动节点</div>
+        <textarea id="ticket-input" class="ticket-input disabled" placeholder="粘贴对方发来的内容（含文件名+票据）..." disabled></textarea>
+        <div class="save-path-row">
+          <span>保存为:</span>
+          <input id="save-filename" class="save-path-input" value="" readonly style="color:#58a6ff" placeholder="自动识别文件名">
+        </div>
+        <button id="btn-receive" class="btn btn-primary" disabled>接收文件</button>
+        <!-- 进度区域 -->
+        <div id="progress-area" style="display:none; margin-top:8px;">
+          <div class="progress-bar-container" id="progress-bar-container">
+            <div class="progress-bar indeterminate" id="progress-bar"></div>
+          </div>
+          <div class="progress-message" id="progress-message">正在连接...</div>
+        </div>
+        <div id="receive-result" style="display:none">
+          <div class="result-box">
+            <p id="receive-status"></p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 传输历史 -->
+    <div class="history-panel">
+      <h2>📋 传输历史</h2>
+      <div id="transfer-history" class="history-list">
+        <div class="history-item" style="color:#484f58;">暂无记录</div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const invoke = window.__TAURI_INTERNALS__.invoke;
+    const history = [];
+
+    // === 节点管理 ===
+    const nodeStatusIcon = document.getElementById('node-status-icon');
+    const nodeStatus = document.getElementById('node-status');
+    const nodeId = document.getElementById('node-id');
+    const btnStartNode = document.getElementById('btn-start-node');
+    const dropZone = document.getElementById('drop-zone');
+    const ticketInput = document.getElementById('ticket-input');
+    const btnReceive = document.getElementById('btn-receive');
+
+    btnStartNode.addEventListener('click', async () => {
+      btnStartNode.disabled = true;
+      btnStartNode.textContent = '启动中...';
+      nodeStatusIcon.textContent = '🟡';
+      nodeStatus.textContent = '正在启动...';
+      try {
+        const id = await invoke('start_node');
+        nodeStatusIcon.textContent = '🟢';
+        nodeStatus.textContent = '节点在线';
+        nodeId.textContent = id.substring(0, 24) + '...';
+        btnStartNode.style.display = 'none';
+        // 启用发送和接收
+        document.getElementById('send-disabled-hint').style.display = 'none';
+        dropZone.classList.remove('disabled');
+        dropZone.style.cursor = 'pointer';
+        document.getElementById('receive-disabled-hint').style.display = 'none';
+        ticketInput.classList.remove('disabled');
+        ticketInput.disabled = false;
+        btnReceive.disabled = false;
+      } catch (e) {
+        nodeStatus.textContent = '启动失败: ' + e;
+        btnStartNode.disabled = false;
+        btnStartNode.textContent = '重试';
+      }
+    });
+
+    // === 发送文件 ===
+    const sendResult = document.getElementById('send-result');
+    const sendFileName = document.getElementById('send-file-name');
+    const sendFileSize = document.getElementById('send-file-size');
+    const ticketDisplay = document.getElementById('ticket-display');
+    const btnCopyTicket = document.getElementById('btn-copy-ticket');
+    let currentSendContent = '';
+
+    dropZone.addEventListener('click', async () => {
+      dropZone.innerHTML = '<p>⏳ 选择文件中...</p>';
+      try {
+        const filePath = await invoke('pick_file');
+        if (!filePath) {
+          dropZone.innerHTML = '<p>📂 点击选择文件</p><p class="hint">弹出文件选择对话框</p>';
+          return;
+        }
+        dropZone.innerHTML = '<p>⏳ 上传中...</p>';
+        const result = await invoke('send_file', { filePath });
+        const name = result.file_name || filePath.split('/').pop();
+        sendFileName.textContent = name;
+        sendFileSize.textContent = formatSize(result.file_size);
+        currentSendContent = 'iroh://' + name + '|' + result.node_id + '|' + result.file_size + '|' + result.ticket;
+        ticketDisplay.textContent = currentSendContent;
+        sendResult.style.display = 'block';
+        dropZone.innerHTML = '<p>✅ 上传完成</p><p class="hint">点击继续选择文件</p>';
+        addHistory('发送', name, '成功');
+      } catch (e) {
+        dropZone.innerHTML = '<p>❌ 上传失败: ' + e + '</p><p class="hint">点击重试</p>';
+        addHistory('发送', '-', '失败');
+      }
+    });
+
+    btnCopyTicket.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(currentSendContent);
+        btnCopyTicket.textContent = '已复制 ✓';
+        setTimeout(() => { btnCopyTicket.textContent = '复制发送内容'; }, 2000);
+      } catch (e) {
+        btnCopyTicket.textContent = '复制失败';
+      }
+    });
+
+    // === 接收文件 ===
+    const saveFilenameInput = document.getElementById('save-filename');
+    const receiveResult = document.getElementById('receive-result');
+    const receiveStatus = document.getElementById('receive-status');
+    const progressArea = document.getElementById('progress-area');
+    const progressBar = document.getElementById('progress-bar');
+    const progressMessage = document.getElementById('progress-message');
+    let pureTicket = '';
+    let receiveTimer = null;
+
+    // 前端轮询真实下载进度
+    let pollingPath = '';
+    let baseBlobSize = 0; // 开始下载时iroh blobs目录大小
+
+    function startProgressPolling(savePath, totalSize) {
+      pollingPath = savePath;
+      baseBlobSize = 0; // 第一个轮询结果作为基准
+      let seconds = 0;
+      progressArea.style.display = 'block';
+      progressBar.className = 'progress-bar indeterminate';
+      progressMessage.textContent = '正在连接对方节点...';
+      progressMessage.className = 'progress-message';
+
+      receiveTimer = setInterval(async () => {
+        seconds++;
+        if (seconds % 2 === 0) {
+          try {
+            const info = await invoke('check_download_progress', { filePath: pollingPath, blobHash: null });
+            // 文件已导出（第二步完成）
+            if (info.file_exists && info.file_size > 0) {
+              return;
+            }
+            // 用iroh blobs目录大小差值估算下载进度
+            if (info.downloaded_size > 0) {
+              if (baseBlobSize === 0) {
+                baseBlobSize = info.downloaded_size; // 记录基准大小
+              }
+              const downloaded = info.downloaded_size - baseBlobSize;
+              if (totalSize > 0 && downloaded > 0) {
+                const pct = Math.min(Math.round(downloaded / totalSize * 100), 99);
+                progressBar.className = 'progress-bar';
+                progressBar.style.width = pct + '%';
+                progressMessage.textContent = '接收中... ' + formatSize(downloaded) + ' / ' + formatSize(totalSize) + ' (' + pct + '%)';
+                return;
+              }
+            }
+          } catch(e) {}
+        }
+        if (seconds < 3) {
+          progressMessage.textContent = '正在连接对方节点...';
+        } else {
+          progressMessage.textContent = '接收中... ' + seconds + '秒';
+        }
+      }, 1000);
+    }
+
+    function stopProgressPolling(success, message) {
+      if (receiveTimer) {
+        clearInterval(receiveTimer);
+        receiveTimer = null;
+      }
+      if (success) {
+        progressBar.className = 'progress-bar';
+        progressBar.style.width = '100%';
+        progressMessage.textContent = message || '✅ 接收完成';
+        progressMessage.className = 'progress-message success';
+        setTimeout(() => {
+          progressArea.style.display = 'none';
+          progressBar.style.width = '0%';
+        }, 2000);
+      } else {
+        progressBar.className = 'progress-bar';
+        progressBar.style.width = '0%';
+        progressMessage.textContent = message || '❌ 接收失败';
+        progressMessage.className = 'progress-message error';
+      }
+    }
+
+    let senderNodeId = '';
+    let senderFileSize = 0;
+
+    ticketInput.addEventListener('input', () => {
+      const text = ticketInput.value.trim();
+      senderNodeId = '';
+      senderFileSize = 0;
+      if (text.startsWith('iroh://') && text.includes('|')) {
+        const afterPrefix = text.substring(7);
+        const parts = afterPrefix.split('|');
+        if (parts.length >= 4) {
+          // 最新格式: iroh://文件名|节点ID|文件大小|票据
+          saveFilenameInput.value = parts[0];
+          senderNodeId = parts[1];
+          senderFileSize = parseInt(parts[2]) || 0;
+          pureTicket = parts.slice(3).join('|');
+        } else if (parts.length === 3) {
+          // 旧格式: iroh://文件名|节点ID|票据
+          saveFilenameInput.value = parts[0];
+          senderNodeId = parts[1];
+          pureTicket = parts.slice(2).join('|');
+        } else if (parts.length === 2) {
+          // 最旧格式: iroh://文件名|票据
+          saveFilenameInput.value = parts[0];
+          pureTicket = parts[1];
+        }
+      } else if (text.includes('\n') && text.includes('票据')) {
+        const lines = text.split('\n');
+        let filename = '';
+        let ticket = '';
+        for (const line of lines) {
+          if (line.startsWith('文件名:') || line.startsWith('文件名：')) {
+            filename = line.replace(/文件名[:：]/, '').trim();
+          }
+          if (line.startsWith('票据:') || line.startsWith('票据：')) {
+            ticket = line.replace(/票据[:：]/, '').trim();
+          }
+        }
+        if (filename) saveFilenameInput.value = filename;
+        if (ticket) pureTicket = ticket;
+      } else {
+        pureTicket = text;
+        saveFilenameInput.value = '';
+      }
+    });
+
+    btnReceive.addEventListener('click', async () => {
+      const ticket = pureTicket || ticketInput.value.trim();
+      if (!ticket) { ticketInput.focus(); return; }
+
+      const filename = saveFilenameInput.value.trim();
+      if (!filename) {
+        receiveStatus.textContent = '❌ 无法识别文件名，请让对方重新复制发送内容';
+        receiveResult.style.display = 'block';
+        return;
+      }
+
+      const home = await invoke('get_home_dir');
+      const outPath = home + '/Downloads/' + filename;
+
+      btnReceive.disabled = true;
+      btnReceive.textContent = '接收中...';
+      receiveResult.style.display = 'none';
+      startProgressPolling(outPath, senderFileSize);
+
+      try {
+        // 第一步: 下载到iroh内部
+        const blobHash = await invoke('download_blob', { ticket, nodeId: senderNodeId || null });
+        // 第二步: 导出到文件
+        const result = await invoke('export_blob', { blobHash, savePath: outPath });
+        stopProgressPolling(true, '✅ ' + result);
+        receiveStatus.textContent = '✅ ' + result;
+        receiveResult.style.display = 'block';
+        addHistory('接收', filename, '成功');
+      } catch (e) {
+        stopProgressPolling(false, '❌ ' + e);
+        receiveStatus.textContent = '❌ ' + e;
+        receiveResult.style.display = 'block';
+        addHistory('接收', filename, '失败');
+      } finally {
+        btnReceive.disabled = false;
+        btnReceive.textContent = '接收文件';
+      }
+    });
+
+    // === 工具函数 ===
+    function formatSize(bytes) {
+      if (bytes < 1024) return bytes + ' B';
+      if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
+      return (bytes / 1048576).toFixed(1) + ' MB';
+    }
+
+    function addHistory(type, name, status) {
+      const time = new Date().toLocaleTimeString('zh-CN');
+      history.unshift({ type, name, status, time });
+      renderHistory();
+    }
+
+    function renderHistory() {
+      const list = document.getElementById('transfer-history');
+      list.innerHTML = history.slice(0, 10).map(h =>
+        `<div class="history-item">${h.type} | ${h.name} | ${h.status} | ${h.time}</div>`
+      ).join('');
+    }
+  </script>
+</body>
+</html>
