@@ -126,8 +126,8 @@
         const result = await invoke('send_file', { filePath });
         const name = result.file_name || filePath.split('/').pop();
         sendFileName.textContent = name;
-        sendFileSize.textContent = '...';
-        currentSendContent = 'iroh://' + name + '|' + result.node_id + '|' + result.ticket;
+        sendFileSize.textContent = formatSize(result.file_size);
+        currentSendContent = 'iroh://' + name + '|' + result.node_id + '|' + result.file_size + '|' + result.ticket;
         ticketDisplay.textContent = currentSendContent;
         sendResult.style.display = 'block';
         dropZone.innerHTML = '<p>✅ 上传完成</p><p class="hint">点击继续选择文件</p>';
@@ -158,22 +158,36 @@
     let pureTicket = '';
     let receiveTimer = null;
 
-    // 前端轮询更新接收进度（不依赖Tauri事件）
-    function startProgressPolling() {
+    // 前端轮询真实下载进度
+    let pollingPath = '';
+
+    function startProgressPolling(savePath, totalSize) {
+      pollingPath = savePath;
       let seconds = 0;
       progressArea.style.display = 'block';
       progressBar.className = 'progress-bar indeterminate';
       progressMessage.textContent = '正在连接对方节点...';
       progressMessage.className = 'progress-message';
 
-      receiveTimer = setInterval(() => {
+      receiveTimer = setInterval(async () => {
         seconds++;
+        // 每2秒查一次文件大小
+        if (seconds % 2 === 0 && pollingPath) {
+          try {
+            const info = await invoke('check_download_progress', { filePath: pollingPath });
+            if (info.exists && totalSize > 0) {
+              const pct = Math.min(Math.round(info.size / totalSize * 100), 99);
+              progressBar.className = 'progress-bar';
+              progressBar.style.width = pct + '%';
+              progressMessage.textContent = '接收中... ' + formatSize(info.size) + ' / ' + formatSize(totalSize) + ' (' + pct + '%)';
+              return;
+            }
+          } catch(e) {}
+        }
         if (seconds < 3) {
           progressMessage.textContent = '正在连接对方节点...';
-        } else if (seconds < 8) {
-          progressMessage.textContent = '接收中... ' + seconds + '秒';
         } else {
-          progressMessage.textContent = '接收中... ' + seconds + '秒，请确保对方节点在线';
+          progressMessage.textContent = '接收中... ' + seconds + '秒';
         }
       }, 1000);
     }
@@ -201,20 +215,28 @@
     }
 
     let senderNodeId = '';
+    let senderFileSize = 0;
 
     ticketInput.addEventListener('input', () => {
       const text = ticketInput.value.trim();
       senderNodeId = '';
+      senderFileSize = 0;
       if (text.startsWith('iroh://') && text.includes('|')) {
         const afterPrefix = text.substring(7);
         const parts = afterPrefix.split('|');
-        if (parts.length >= 3) {
-          // 新格式: iroh://文件名|节点ID|票据
+        if (parts.length >= 4) {
+          // 最新格式: iroh://文件名|节点ID|文件大小|票据
+          saveFilenameInput.value = parts[0];
+          senderNodeId = parts[1];
+          senderFileSize = parseInt(parts[2]) || 0;
+          pureTicket = parts.slice(3).join('|');
+        } else if (parts.length === 3) {
+          // 旧格式: iroh://文件名|节点ID|票据
           saveFilenameInput.value = parts[0];
           senderNodeId = parts[1];
           pureTicket = parts.slice(2).join('|');
         } else if (parts.length === 2) {
-          // 旧格式: iroh://文件名|票据
+          // 最旧格式: iroh://文件名|票据
           saveFilenameInput.value = parts[0];
           pureTicket = parts[1];
         }
@@ -255,7 +277,7 @@
       btnReceive.disabled = true;
       btnReceive.textContent = '接收中...';
       receiveResult.style.display = 'none';
-      startProgressPolling();
+      startProgressPolling(outPath, senderFileSize);
 
       try {
         const result = await invoke('receive_file', { ticket, savePath: outPath, nodeId: senderNodeId || null });
