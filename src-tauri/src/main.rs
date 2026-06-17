@@ -158,43 +158,17 @@ fn send_file(file_path: String) -> Result<serde_json::Value, String> {
 #[tauri::command]
 fn receive_file(ticket: String, save_path: String) -> Result<String, String> {
     let iroh_path = get_iroh_path()?;
-    
-    // Step 1: blobs get
-    let get_output = std::process::Command::new(&iroh_path)
-        .args(["blobs", "get", &ticket])
+
+    // 直接用 -o 参数下载并保存到指定目录
+    let output = std::process::Command::new(&iroh_path)
+        .args(["blobs", "get", &ticket, "-o", &save_path])
         .output()
         .map_err(|e| format!("执行blobs get失败: {}", e))?;
-    
-    if !get_output.status.success() {
-        return Err(format!("blobs get失败: {}", String::from_utf8_lossy(&get_output.stderr)));
+
+    if !output.status.success() {
+        return Err(format!("接收失败: {}", String::from_utf8_lossy(&output.stderr)));
     }
-    
-    let get_stdout = String::from_utf8_lossy(&get_output.stdout);
-    
-    // 解析blob hash（从输出中找）
-    let blob_id = get_stdout.lines()
-        .find(|l| l.contains("blob") || l.contains("Blob"))
-        .and_then(|l| {
-            l.split_whitespace()
-                .find(|w| w.starts_with("baf") || w.len() > 30)
-                .map(|w| w.to_string())
-        })
-        .unwrap_or_default();
-    
-    if blob_id.is_empty() {
-        return Err(format!("无法从输出解析Blob ID: {}", get_stdout));
-    }
-    
-    // Step 2: blobs export
-    let export_output = std::process::Command::new(&iroh_path)
-        .args(["blobs", "export", &blob_id, &save_path])
-        .output()
-        .map_err(|e| format!("执行blobs export失败: {}", e))?;
-    
-    if !export_output.status.success() {
-        return Err(format!("blobs export失败: {}", String::from_utf8_lossy(&export_output.stderr)));
-    }
-    
+
     Ok(format!("文件已保存到: {}", save_path))
 }
 
