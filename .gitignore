@@ -6,3 +6,4 @@ gen-icon.js
 src-tauri/binaries/
 src-tauri/gen/
 .DS_Store
+test_500mb.bin
