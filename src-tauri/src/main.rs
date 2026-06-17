@@ -171,10 +171,31 @@ fn send_file(file_path: String, state: State<AppState>) -> Result<serde_json::Va
 
 #[tauri::command]
 fn check_download_progress(file_path: String) -> Result<serde_json::Value, String> {
-    let metadata = std::fs::metadata(&file_path).map_err(|e| format!("无法读取文件: {}", e))?;
+    // 查iroh blobs目录总大小作为下载进度参考
+    let iroh_dir = std::env::var("HOME")
+        .map(|h| format!("{}/.local/share/iroh/blobs", h))
+        .unwrap_or_default();
+    let iroh_size = std::process::Command::new("du")
+        .args(["-sb", &iroh_dir])
+        .output()
+        .ok()
+        .and_then(|o| {
+            let out = String::from_utf8_lossy(&o.stdout);
+            out.split_whitespace().next().and_then(|s| s.parse::<u64>().ok())
+        })
+        .unwrap_or(0);
+
+    let file_exists = std::path::Path::new(&file_path).exists();
+    let file_size = if file_exists {
+        std::fs::metadata(&file_path).map(|m| m.len()).unwrap_or(0)
+    } else {
+        0
+    };
+
     Ok(serde_json::json!({
-        "size": metadata.len(),
-        "exists": true
+        "iroh_store_size": iroh_size,
+        "file_exists": file_exists,
+        "file_size": file_size
     }))
 }
 
@@ -211,26 +232,41 @@ async fn receive_file(ticket: String, save_path: String, node_id: Option<String>
     };
 
     tokio::task::spawn_blocking(move || {
+        // 第一步: blobs get 下载到iroh内部数据库
         let mut cmd = std::process::Command::new(&iroh_path);
-        cmd.args(["blobs", "get", &ticket, "-o", &out_path]);
+        cmd.args(["blobs", "get", &ticket]);
         if let Some(ref nid) = node_id {
             if !nid.is_empty() {
                 cmd.args(["--node", nid]);
             }
         }
         let output = cmd.output().map_err(|e| format!("blobs get失败: {}", e))?;
-        if output.status.success() {
-            let stdout = String::from_utf8_lossy(&output.stdout);
+        if !output.status.success() {
+            return Err(format!("下载失败: {}", String::from_utf8_lossy(&output.stderr)));
+        }
+
+        // 解析blob hash
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let blob_hash = stdout
+            .lines()
+            .find(|l| l.starts_with("Fetching:"))
+            .map(|l| l.replace("Fetching:", "").trim().to_string())
+            .unwrap_or_default();
+
+        // 第二步: blobs export 导出到文件
+        let export_output = std::process::Command::new(&iroh_path)
+            .args(["blobs", "export", &blob_hash, &out_path])
+            .output()
+            .map_err(|e| format!("blobs export失败: {}", e))?;
+
+        if export_output.status.success() {
             let transferred = stdout
                 .lines()
                 .find(|l| l.starts_with("Transferred"))
                 .unwrap_or("");
             Ok(format!("文件已保存到: {} {}", out_path, transferred))
         } else {
-            Err(format!(
-                "接收失败: {}",
-                String::from_utf8_lossy(&output.stderr)
-            ))
+            Err(format!("导出失败: {}", String::from_utf8_lossy(&export_output.stderr)))
         }
     }).await.map_err(|e| format!("任务执行失败: {}", e))?
 }
