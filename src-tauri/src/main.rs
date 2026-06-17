@@ -159,17 +159,47 @@ fn send_file(file_path: String) -> Result<serde_json::Value, String> {
 fn receive_file(ticket: String, save_path: String) -> Result<String, String> {
     let iroh_path = get_iroh_path()?;
 
-    // 直接用 -o 参数下载并保存到指定目录
-    let output = std::process::Command::new(&iroh_path)
+    // 使用超时机制，避免长时间卡住（最多30秒）
+    let mut child = std::process::Command::new(&iroh_path)
         .args(["blobs", "get", &ticket, "-o", &save_path])
-        .output()
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
         .map_err(|e| format!("执行blobs get失败: {}", e))?;
 
-    if !output.status.success() {
-        return Err(format!("接收失败: {}", String::from_utf8_lossy(&output.stderr)));
-    }
+    let timeout = std::time::Duration::from_secs(30);
+    let start = std::time::Instant::now();
 
-    Ok(format!("文件已保存到: {}", save_path))
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                let _stdout = child.stdout.take().map(|mut s| {
+                    let mut buf = String::new();
+                    std::io::Read::read_to_string(&mut s, &mut buf).ok();
+                    buf
+                }).unwrap_or_default();
+                let stderr = child.stderr.take().map(|mut s| {
+                    let mut buf = String::new();
+                    std::io::Read::read_to_string(&mut s, &mut buf).ok();
+                    buf
+                }).unwrap_or_default();
+
+                if status.success() {
+                    return Ok(format!("文件已保存到: {}", save_path));
+                } else {
+                    return Err(format!("接收失败: {}", stderr));
+                }
+            }
+            Ok(None) => {
+                if start.elapsed() > timeout {
+                    let _ = child.kill();
+                    return Err("接收超时，对方节点可能未启动".to_string());
+                }
+                std::thread::sleep(std::time::Duration::from_millis(200));
+            }
+            Err(e) => return Err(format!("进程错误: {}", e)),
+        }
+    }
 }
 
 fn main() {
