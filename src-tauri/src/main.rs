@@ -157,7 +157,7 @@ fn send_file(file_path: String, state: State<AppState>) -> Result<serde_json::Va
 }
 
 #[tauri::command]
-fn receive_file(ticket: String, save_path: String, node_id: Option<String>) -> Result<String, String> {
+async fn receive_file(ticket: String, save_path: String, node_id: Option<String>) -> Result<String, String> {
     let iroh_path = get_iroh_path()?;
     let out_path = if std::path::Path::new(&save_path).exists() {
         let stem = std::path::Path::new(&save_path)
@@ -188,27 +188,29 @@ fn receive_file(ticket: String, save_path: String, node_id: Option<String>) -> R
         save_path.clone()
     };
 
-    let mut cmd = std::process::Command::new(&iroh_path);
-    cmd.args(["blobs", "get", &ticket, "-o", &out_path]);
-    if let Some(ref nid) = node_id {
-        if !nid.is_empty() {
-            cmd.args(["--node", nid]);
+    tokio::task::spawn_blocking(move || {
+        let mut cmd = std::process::Command::new(&iroh_path);
+        cmd.args(["blobs", "get", &ticket, "-o", &out_path]);
+        if let Some(ref nid) = node_id {
+            if !nid.is_empty() {
+                cmd.args(["--node", nid]);
+            }
         }
-    }
-    let output = cmd.output().map_err(|e| format!("blobs get失败: {}", e))?;
-    if output.status.success() {
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let transferred = stdout
-            .lines()
-            .find(|l| l.starts_with("Transferred"))
-            .unwrap_or("");
-        Ok(format!("文件已保存到: {} {}", out_path, transferred))
-    } else {
-        Err(format!(
-            "接收失败: {}",
-            String::from_utf8_lossy(&output.stderr)
-        ))
-    }
+        let output = cmd.output().map_err(|e| format!("blobs get失败: {}", e))?;
+        if output.status.success() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let transferred = stdout
+                .lines()
+                .find(|l| l.starts_with("Transferred"))
+                .unwrap_or("");
+            Ok(format!("文件已保存到: {} {}", out_path, transferred))
+        } else {
+            Err(format!(
+                "接收失败: {}",
+                String::from_utf8_lossy(&output.stderr)
+            ))
+        }
+    }).await.map_err(|e| format!("任务执行失败: {}", e))?
 }
 
 fn main() {
