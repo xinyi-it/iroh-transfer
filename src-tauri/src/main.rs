@@ -177,20 +177,28 @@ fn send_file(file_path: String, state: State<AppState>) -> Result<serde_json::Va
 fn start_download(ticket: String, node_id: Option<String>, state: State<'_, AppState>) -> Result<String, String> {
     let iroh_path = get_iroh_path()?;
     
-    // 记录下载前的blobs目录大小作为基准
+    // 记录下载前blobs/data/目录里最新.data文件的大小作为基准
     let iroh_data_dir = std::env::var("IROH_HOME_DIR")
         .unwrap_or_else(|_| dirs::data_dir()
             .map(|p| p.join("iroh").to_string_lossy().to_string())
             .unwrap_or_else(|| "~/.local/share/iroh".to_string()));
-    let blobs_dir = std::path::Path::new(&iroh_data_dir).join("blobs");
-    let base_size = if blobs_dir.exists() {
-        std::process::Command::new("du")
-            .args(["-sb", &blobs_dir.to_string_lossy()])
-            .output().ok()
-            .and_then(|o| {
-                String::from_utf8_lossy(&o.stdout).split_whitespace().next()
-                    .and_then(|s| s.parse::<u64>().ok())
-            }).unwrap_or(0u64)
+    let data_dir = std::path::Path::new(&iroh_data_dir).join("blobs").join("data");
+    let base_size = if data_dir.exists() {
+        if let Ok(entries) = std::fs::read_dir(&data_dir) {
+            let mut latest_time: std::time::SystemTime = std::time::UNIX_EPOCH;
+            let mut latest_sz: u64 = 0;
+            for entry in entries.flatten() {
+                if let Ok(meta) = entry.metadata() {
+                    if meta.modified().unwrap_or(std::time::UNIX_EPOCH) > latest_time {
+                        latest_time = meta.modified().unwrap_or(std::time::UNIX_EPOCH);
+                        latest_sz = meta.len();
+                    }
+                }
+            }
+            latest_sz
+        } else {
+            0u64
+        }
     } else {
         0u64
     };
@@ -255,24 +263,27 @@ fn check_download_status(state: State<'_, AppState>) -> Result<serde_json::Value
                 }));
             }
             Ok(None) => {
-                // 还在下载中，查blobs目录大小变化
+                // 还在下载中，查blobs/data/目录里最新.data文件的大小变化
                 let iroh_data_dir = std::env::var("IROH_HOME_DIR")
                     .unwrap_or_else(|_| dirs::data_dir()
                         .map(|p| p.join("iroh").to_string_lossy().to_string())
                         .unwrap_or_else(|| "~/.local/share/iroh".to_string()));
-                let blobs_dir = std::path::Path::new(&iroh_data_dir).join("blobs");
-                let current_size = if blobs_dir.exists() {
-                    std::process::Command::new("du")
-                        .args(["-sb", &blobs_dir.to_string_lossy()])
-                        .output().ok()
-                        .and_then(|o| {
-                            String::from_utf8_lossy(&o.stdout).split_whitespace().next()
-                                .and_then(|s| s.parse::<u64>().ok())
-                        }).unwrap_or(0u64)
-                } else {
-                    0u64
-                };
-                let downloaded = if current_size > base_size { current_size - base_size } else { 0 };
+                let data_dir = std::path::Path::new(&iroh_data_dir).join("blobs").join("data");
+                let mut latest_size: u64 = 0;
+                if data_dir.exists() {
+                    if let Ok(entries) = std::fs::read_dir(&data_dir) {
+                        let mut latest_time: std::time::SystemTime = std::time::UNIX_EPOCH;
+                        for entry in entries.flatten() {
+                            if let Ok(meta) = entry.metadata() {
+                                if meta.modified().unwrap_or(std::time::UNIX_EPOCH) > latest_time {
+                                    latest_time = meta.modified().unwrap_or(std::time::UNIX_EPOCH);
+                                    latest_size = meta.len();
+                                }
+                            }
+                        }
+                    }
+                }
+                let downloaded = if latest_size > base_size { latest_size - base_size } else { 0 };
                 
                 return Ok(serde_json::json!({
                     "status": "downloading",
