@@ -159,6 +159,7 @@
     const progressMessage = document.getElementById('progress-message');
     let pureTicket = '';
     let receiveTimer = null;
+    let baseStoreSize = 0;
 
     // 前端轮询真实下载进度
     let pollingPath = '';
@@ -171,18 +172,30 @@
       progressMessage.textContent = '正在连接对方节点...';
       progressMessage.className = 'progress-message';
 
+      // 记录初始iroh存储大小
+      invoke('check_download_progress', { filePath: pollingPath }).then(info => {
+        baseStoreSize = info.iroh_store_size || 0;
+      }).catch(() => {});
+
       receiveTimer = setInterval(async () => {
         seconds++;
-        // 每2秒查一次文件大小
-        if (seconds % 2 === 0 && pollingPath) {
+        if (pollingPath && seconds % 2 === 0) {
           try {
             const info = await invoke('check_download_progress', { filePath: pollingPath });
-            if (info.exists && totalSize > 0) {
-              const pct = Math.min(Math.round(info.size / totalSize * 100), 99);
-              progressBar.className = 'progress-bar';
-              progressBar.style.width = pct + '%';
-              progressMessage.textContent = '接收中... ' + formatSize(info.size) + ' / ' + formatSize(totalSize) + ' (' + pct + '%)';
-              return;
+            // 优先看文件是否已导出（第二步完成）
+            if (info.file_exists && info.file_size > 0) {
+              return; // 文件已出现，等receive_file返回即可
+            }
+            // 看iroh存储大小变化（第一步下载中）
+            if (totalSize > 0 && info.iroh_store_size > 0 && baseStoreSize > 0) {
+              const downloaded = info.iroh_store_size - baseStoreSize;
+              if (downloaded > 0) {
+                const pct = Math.min(Math.round(downloaded / totalSize * 100), 99);
+                progressBar.className = 'progress-bar';
+                progressBar.style.width = pct + '%';
+                progressMessage.textContent = '接收中... ' + formatSize(downloaded) + ' / ' + formatSize(totalSize) + ' (' + pct + '%)';
+                return;
+              }
             }
           } catch(e) {}
         }
