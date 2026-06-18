@@ -265,12 +265,27 @@ async function startNode() {
   }
 }
 
+function resetReceiveState() {
+  receiving.value = false
+  showProgress.value = false
+  progressPercent.value = 0
+  progressStatus.value = ''
+  progressMsg.value = ''
+  progressMsgClass.value = ''
+  receiveMsg.value = ''
+  receiveSuccess.value = false
+  sendResult.value = null
+  sendContent.value = ''
+  copyBtnText.value = '复制发送内容'
+}
+
 async function stopNode() {
   nodeStopping.value = true
   try {
     await invoke('stop_node')
     nodeOnline.value = false
     nodeId.value = ''
+    resetReceiveState()
   } catch (e) {
     ElMessage.error('停止失败: ' + e)
   } finally {
@@ -293,6 +308,7 @@ async function restartNode() {
     await invoke('stop_node')
     nodeOnline.value = false
     nodeId.value = ''
+    resetReceiveState()
     const id = await invoke<string>('start_node')
     nodeId.value = id.substring(0, 24) + '...'
     nodeOnline.value = true

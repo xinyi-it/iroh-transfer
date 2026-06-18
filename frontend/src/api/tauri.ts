@@ -1,9 +1,10 @@
 // Tauri invoke 封装
+import { listen as tauriListen } from '@tauri-apps/api/event'
+
 declare global {
   interface Window {
     __TAURI_INTERNALS__: {
       invoke: (cmd: string, args?: Record<string, unknown>) => Promise<unknown>
-      listen: (event: string, handler: (event: { payload: unknown }) => void) => Promise<() => void>
     }
   }
 }
@@ -13,7 +14,7 @@ export function invoke<T = string>(cmd: string, args?: Record<string, unknown>):
 }
 
 export function listen<T = unknown>(event: string, handler: (event: T) => void): Promise<() => void> {
-  return window.__TAURI_INTERNALS__.listen(event, (e: { payload: unknown }) => handler(e.payload as T))
+  return tauriListen(event, (e: { payload: T }) => handler(e.payload))
 }
 
 // 类型定义
