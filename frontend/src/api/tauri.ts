@@ -25,7 +25,7 @@ export interface SendFileResult {
 }
 
 export interface DownloadProgress {
-  status: 'downloading' | 'completed' | 'failed'
+  status: 'connecting' | 'downloading' | 'completed' | 'failed'
   downloaded_size: number
   total_size: number
   save_path?: string

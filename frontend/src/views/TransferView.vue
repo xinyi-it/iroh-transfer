@@ -252,10 +252,13 @@ const nodeId = ref('')
 async function startNode() {
   nodeStarting.value = true
   try {
+    console.log('[DEBUG] startNode called, invoking start_node...')
     const id = await invoke<string>('start_node')
+    console.log('[DEBUG] start_node returned:', id)
     nodeId.value = id.substring(0, 24) + '...'
     nodeOnline.value = true
   } catch (e) {
+    console.error('[DEBUG] start_node error:', e)
     ElMessage.error('启动失败: ' + e)
   } finally {
     nodeStarting.value = false
@@ -364,7 +367,10 @@ function onTicketInput() {
 }
 
 function onDownloadProgress(info: DownloadProgress) {
-  if (info.status === 'downloading') {
+  if (info.status === 'connecting') {
+    progressMsg.value = '正在连接对方节点...'
+    progressMsgClass.value = ''
+  } else if (info.status === 'downloading') {
     const downloaded = info.downloaded_size
     const total = info.total_size || parsedFileSize
     if (total > 0 && downloaded > 0) {
