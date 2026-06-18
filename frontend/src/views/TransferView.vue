@@ -399,6 +399,12 @@ function onDownloadProgress(info: DownloadProgress) {
 
 onMounted(async () => {
   unlisten = await listen<DownloadProgress>('download-progress', onDownloadProgress)
+  // 自动启动节点
+  setTimeout(async () => {
+    if (!nodeOnline.value && !nodeStarting.value) {
+      await startNode()
+    }
+  }, 2000)
 })
 
 onUnmounted(() => {
