@@ -8,3 +8,7 @@ src-tauri/gen/
 .DS_Store
 test_500mb.bin
 test_progress_200mb.bin
+screenshot-*.png
+scripts/
+*.pyc
+__pycache__/
