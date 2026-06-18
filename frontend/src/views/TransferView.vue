@@ -44,6 +44,22 @@
       >
         {{ nodeStarting ? '启动中...' : '启动节点' }}
       </el-button>
+      <template v-else>
+        <el-button
+          type="warning"
+          :loading="nodeRestarting"
+          @click="restartNode"
+        >
+          {{ nodeRestarting ? '重启中...' : '重启节点' }}
+        </el-button>
+        <el-button
+          type="danger"
+          :loading="nodeStopping"
+          @click="stopNode"
+        >
+          {{ nodeStopping ? '停止中...' : '停止节点' }}
+        </el-button>
+      </template>
     </el-header>
 
     <!-- 主内容区 -->
@@ -189,7 +205,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { UploadFilled, Loading, WarningFilled } from '@element-plus/icons-vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { invoke, listen } from '../api/tauri'
 import type { SendFileResult, DownloadProgress } from '../api/tauri'
 import { formatSize, parseTicketInput } from '../utils'
@@ -229,6 +245,8 @@ checkDeps()
 // === 节点状态 ===
 const nodeOnline = ref(false)
 const nodeStarting = ref(false)
+const nodeStopping = ref(false)
+const nodeRestarting = ref(false)
 const nodeId = ref('')
 
 async function startNode() {
@@ -241,6 +259,44 @@ async function startNode() {
     ElMessage.error('启动失败: ' + e)
   } finally {
     nodeStarting.value = false
+  }
+}
+
+async function stopNode() {
+  nodeStopping.value = true
+  try {
+    await invoke('stop_node')
+    nodeOnline.value = false
+    nodeId.value = ''
+  } catch (e) {
+    ElMessage.error('停止失败: ' + e)
+  } finally {
+    nodeStopping.value = false
+  }
+}
+
+async function restartNode() {
+  try {
+    await ElMessageBox.confirm('确定要重启节点吗？', '重启确认', {
+      confirmButtonText: '确定',
+      cancelButtonText: '取消',
+      type: 'warning',
+    })
+  } catch {
+    return
+  }
+  nodeRestarting.value = true
+  try {
+    await invoke('stop_node')
+    nodeOnline.value = false
+    nodeId.value = ''
+    const id = await invoke<string>('start_node')
+    nodeId.value = id.substring(0, 24) + '...'
+    nodeOnline.value = true
+  } catch (e) {
+    ElMessage.error('重启失败: ' + e)
+  } finally {
+    nodeRestarting.value = false
   }
 }
 

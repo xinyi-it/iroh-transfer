@@ -5,20 +5,24 @@ use std::sync::Mutex;
 use std::str::FromStr;
 use tauri::{AppHandle, Emitter, State};
 use iroh::client::Iroh;
+use iroh::node::Node;
+use iroh::blobs::store::fs::Store as FsStore;
 use iroh::blobs::get::db::DownloadProgress;
 use iroh::blobs::get::progress::BlobProgress;
 use iroh::blobs::BlobFormat;
 use iroh::base::ticket::BlobTicket;
 use iroh::net::key::PublicKey;
-use iroh::client::blobs::{DownloadMode, DownloadOptions};
+use iroh::client::blobs::{DownloadMode, DownloadOptions, WrapOption};
+use iroh::blobs::util::SetTagOption;
+use iroh::base::node_addr::AddrInfoOptions;
 use futures_lite::StreamExt;
 
-struct IrohNode {
-    node_id: Option<String>,
-}
-
 struct AppState {
-    iroh_node: Mutex<IrohNode>,
+    // 存储在应用内启动的 iroh 节点
+    node: Mutex<Option<Node<FsStore>>>,
+    // 存储 RPC client（可能来自内部节点或外部 CLI）
+    iroh_client: Mutex<Option<Iroh>>,
+    node_id: Mutex<Option<String>>,
     download_active: Mutex<bool>,
 }
 
@@ -59,27 +63,6 @@ fn get_iroh_path() -> Result<String, String> {
         }
     }
     Err("未找到iroh，请先安装: cargo install iroh-cli".to_string())
-}
-
-async fn connect_iroh() -> Result<Iroh, String> {
-    // 获取iroh RPC地址
-    let iroh_path = get_iroh_path()?;
-    let output = std::process::Command::new(&iroh_path)
-        .args(["status"])
-        .env("https_proxy", std::env::var("https_proxy").unwrap_or_default())
-        .env("http_proxy", std::env::var("http_proxy").unwrap_or_default())
-        .env("all_proxy", std::env::var("all_proxy").unwrap_or_default())
-        .output()
-        .map_err(|e| format!("获取iroh状态失败: {}", e))?;
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    // 解析 RPC Addr: 127.0.0.1:xxxx
-    let rpc_addr = stdout
-        .lines()
-        .find(|l| l.starts_with("RPC Addr:"))
-        .and_then(|l| l.split(':').nth(1).map(|s| s.trim()))
-        .and_then(|l| l.parse::<std::net::SocketAddr>().ok())
-        .ok_or("无法获取iroh RPC地址，请确认iroh已启动")?;
-    Iroh::connect_addr(rpc_addr).await.map_err(|e| format!("连接iroh节点失败: {}", e))
 }
 
 #[tauri::command]
@@ -152,140 +135,132 @@ fn get_home_dir() -> Result<String, String> {
 
 #[tauri::command]
 async fn start_node(state: State<'_, AppState>) -> Result<String, String> {
-    let iroh_path = get_iroh_path()?;
-
-    // 先检查iroh是否已经在运行
-    if let Ok(output) = std::process::Command::new(&iroh_path)
-        .args(["status"])
-        .env("https_proxy", std::env::var("https_proxy").unwrap_or_default())
-        .env("http_proxy", std::env::var("http_proxy").unwrap_or_default())
-        .env("all_proxy", std::env::var("all_proxy").unwrap_or_default())
-        .output()
-    {
-        if output.status.success() {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            if let Some(id) = stdout
-                .lines()
-                .find(|l| l.starts_with("Node ID:"))
-                .map(|l| l.replace("Node ID:", "").trim().to_string())
-            {
-                if !id.is_empty() {
-                    let mut node = state.iroh_node.lock().map_err(|e| e.to_string())?;
-                    node.node_id = Some(id.clone());
-                    return Ok(id);
-                }
-            }
-        }
+    // 先检查是否已有内部连接
+    let existing_client = {
+        let guard = state.iroh_client.lock().map_err(|e| e.to_string())?;
+        guard.as_ref().cloned()
+    };
+    if let Some(iroh) = existing_client {
+        let node_id = iroh.net().node_id().await.map_err(|e| format!("获取node_id失败: {}", e))?;
+        let id_str = node_id.to_string();
+        let mut nid = state.node_id.lock().map_err(|e| e.to_string())?;
+        *nid = Some(id_str.clone());
+        return Ok(id_str);
     }
 
-    // iroh未运行，先关闭可能残留的进程，再启动
-    let _ = std::process::Command::new(&iroh_path)
-        .args(["shutdown"])
-        .output();
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    // 用 iroh Rust SDK 直接在应用内启动节点（持久化存储）
+    let data_dir = dirs::data_local_dir()
+        .ok_or("无法获取本地数据目录")?
+        .join("iroh-transfer");
+    std::fs::create_dir_all(&data_dir)
+        .map_err(|e| format!("创建数据目录失败: {}", e))?;
 
-    std::process::Command::new(&iroh_path)
-        .args(["start"])
-        .env("https_proxy", std::env::var("https_proxy").unwrap_or_default())
-        .env("http_proxy", std::env::var("http_proxy").unwrap_or_default())
-        .env("all_proxy", std::env::var("all_proxy").unwrap_or_default())
-        .spawn()
-        .map_err(|e| format!("启动iroh失败: {}", e))?;
+    // 用 Builder 创建持久化 iroh 节点
+    let builder = Node::<FsStore>::persistent(&data_dir)
+        .await
+        .map_err(|e| format!("创建iroh节点失败: {}", e))?;
 
-    let iroh_path_clone = iroh_path.clone();
-    let node_id = tokio::task::spawn_blocking(move || {
-        for _ in 0..60 {
-            std::thread::sleep(std::time::Duration::from_secs(1));
-            if let Ok(output) = std::process::Command::new(&iroh_path_clone)
-                .args(["status"])
-                .env("https_proxy", std::env::var("https_proxy").unwrap_or_default())
-                .env("http_proxy", std::env::var("http_proxy").unwrap_or_default())
-                .env("all_proxy", std::env::var("all_proxy").unwrap_or_default())
-                .output()
-            {
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                if let Some(id) = stdout
-                    .lines()
-                    .find(|l| l.starts_with("Node ID:"))
-                    .map(|l| l.replace("Node ID:", "").trim().to_string())
-                {
-                    if !id.is_empty() {
-                        return Ok(id);
-                    }
-                }
+    let builder = match builder.enable_rpc_with_addr("127.0.0.1:0".parse().unwrap()).await {
+        Ok(b) => b,
+        Err(e) => {
+            let err_msg = format!("{}", e);
+            if err_msg.contains("already running") || err_msg.contains("rpc.lock") {
+                // 清除残留的锁文件后重试
+                let _ = std::fs::remove_file(data_dir.join("rpc.lock"));
+                Node::<FsStore>::persistent(&data_dir)
+                    .await
+                    .map_err(|e2| format!("重试创建iroh节点失败: {}", e2))?
+                    .enable_rpc_with_addr("127.0.0.1:0".parse().unwrap())
+                    .await
+                    .map_err(|e2| format!("重试启用RPC失败: {}", e2))?
+            } else {
+                return Err(format!("启用RPC失败: {}", e));
             }
         }
-        Err("启动超时，请检查iroh是否正常".to_string())
-    }).await.map_err(|e| format!("任务执行失败: {}", e))??;
+    };
 
-    let mut node = state.iroh_node.lock().map_err(|e| e.to_string())?;
-    node.node_id = Some(node_id.clone());
-    Ok(node_id)
+    let node = builder.spawn().await.map_err(|e| format!("启动iroh节点失败: {}", e))?;
+
+    let node_id = node.node_id();
+    let id_str = node_id.to_string();
+    let client = node.client().clone();
+
+    let mut node_guard = state.node.lock().map_err(|e| e.to_string())?;
+    *node_guard = Some(node);
+    drop(node_guard);
+    let mut client_guard = state.iroh_client.lock().map_err(|e| e.to_string())?;
+    *client_guard = Some(client);
+    drop(client_guard);
+    let mut nid = state.node_id.lock().map_err(|e| e.to_string())?;
+    *nid = Some(id_str.clone());
+    Ok(id_str)
 }
 
 #[tauri::command]
-fn stop_node(state: State<AppState>) -> Result<(), String> {
-    let iroh_path = get_iroh_path()?;
-    std::process::Command::new(&iroh_path)
-        .args(["shutdown"])
-        .env("https_proxy", std::env::var("https_proxy").unwrap_or_default())
-        .env("http_proxy", std::env::var("http_proxy").unwrap_or_default())
-        .env("all_proxy", std::env::var("all_proxy").unwrap_or_default())
-        .output()
-        .map_err(|e| format!("shutdown失败: {}", e))?;
-    let mut node = state.iroh_node.lock().map_err(|e| e.to_string())?;
-    node.node_id = None;
+async fn stop_node(state: State<'_, AppState>) -> Result<(), String> {
+    // 先清除客户端引用
+    {
+        let mut client_guard = state.iroh_client.lock().map_err(|e| e.to_string())?;
+        *client_guard = None;
+    }
+    // 取出 node（take 后锁自动释放），再 shutdown
+    let node_opt = {
+        let mut node_guard = state.node.lock().map_err(|e| e.to_string())?;
+        node_guard.take()
+    };
+    if let Some(node) = node_opt {
+        node.shutdown().await.map_err(|e| format!("关闭节点失败: {}", e))?;
+    }
+    {
+        let mut nid = state.node_id.lock().map_err(|e| e.to_string())?;
+        *nid = None;
+    }
     Ok(())
 }
 
 #[tauri::command]
-fn send_file(file_path: String, state: State<AppState>) -> Result<serde_json::Value, String> {
-    let iroh_path = get_iroh_path()?;
-    let output = std::process::Command::new(&iroh_path)
-        .args(["blobs", "add", &file_path])
-        .env("https_proxy", std::env::var("https_proxy").unwrap_or_default())
-        .env("http_proxy", std::env::var("http_proxy").unwrap_or_default())
-        .env("all_proxy", std::env::var("all_proxy").unwrap_or_default())
-        .output()
-        .map_err(|e| format!("blobs add失败: {}", e))?;
-    if !output.status.success() {
-        return Err(format!(
-            "blobs add失败: {}",
-            String::from_utf8_lossy(&output.stderr)
-        ));
-    }
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let mut blob_id = String::new();
-    let mut ticket = String::new();
-    for line in stdout.lines() {
-        if line.starts_with("Blob:") {
-            blob_id = line.split_whitespace().nth(1).unwrap_or("").to_string();
-        }
-        if line.contains("ticket:") {
-            if let Some(idx) = line.find("ticket:") {
-                ticket = line[idx + 7..].trim().to_string();
-            }
-        }
-    }
-    if blob_id.is_empty() || ticket.is_empty() {
-        return Err(format!("解析iroh输出失败: {}", stdout));
-    }
-    let file_name = file_path
-        .split('/')
-        .last()
-        .unwrap_or("downloaded")
-        .to_string();
-    let file_size = std::fs::metadata(&file_path).map(|m| m.len()).unwrap_or(0);
+async fn send_file(file_path: String, state: State<'_, AppState>) -> Result<serde_json::Value, String> {
+    let iroh = {
+        let guard = state.iroh_client.lock().map_err(|e| e.to_string())?;
+        guard.as_ref()
+            .ok_or("iroh节点未启动")
+            .map(|i| i.clone())?
+    };
     let node_id = state
-        .iroh_node
+        .node_id
         .lock()
         .map_err(|e| e.to_string())?
-        .node_id
         .clone()
         .unwrap_or_default();
+
+    let abs_path = std::path::Path::new(&file_path).to_path_buf();
+    let file_name = abs_path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or("downloaded".to_string());
+    let file_size = std::fs::metadata(&abs_path).map(|m| m.len()).unwrap_or(0);
+
+    // 用 iroh SDK 添加文件
+    let outcome = iroh.blobs().add_from_path(
+        abs_path,
+        false,
+        SetTagOption::Auto,
+        WrapOption::NoWrap,
+    ).await.map_err(|e| format!("添加文件失败: {}", e))?
+    .finish().await.map_err(|e| format!("添加文件完成失败: {}", e))?;
+
+    let hash = outcome.hash;
+
+    // 用 iroh SDK 生成 ticket
+    let ticket = iroh.blobs().share(
+        hash,
+        BlobFormat::Raw,
+        AddrInfoOptions::RelayAndAddresses,
+    ).await.map_err(|e| format!("生成ticket失败: {}", e))?;
+
     Ok(serde_json::json!({
-        "blob_id": blob_id,
-        "ticket": ticket,
+        "blob_id": hash.to_string(),
+        "ticket": ticket.to_string(),
         "file_name": file_name,
         "node_id": node_id,
         "file_size": file_size
@@ -294,9 +269,7 @@ fn send_file(file_path: String, state: State<AppState>) -> Result<serde_json::Va
 
 /// 解析ticket字符串为BlobTicket
 fn parse_ticket(ticket_str: &str) -> Result<BlobTicket, String> {
-    // ticket可能是纯ticket，也可能是iroh://filename|nodeid|size|ticket格式
     let ticket_part = if ticket_str.starts_with("iroh://") {
-        // 从iroh://格式中提取ticket部分（最后一个|后的内容）
         ticket_str.rsplit_once('|').map(|(_, t)| t).unwrap_or(ticket_str)
     } else {
         ticket_str
@@ -345,10 +318,15 @@ async fn start_download(
     state: State<'_, AppState>,
     app: AppHandle,
 ) -> Result<String, String> {
-    // 标记下载开始
     *state.download_active.lock().unwrap() = true;
 
-    let iroh = connect_iroh().await?;
+    let iroh = {
+        let guard = state.iroh_client.lock().map_err(|e| e.to_string())?;
+        guard.as_ref()
+            .ok_or("iroh节点未启动")
+            .map(|i| i.clone())?
+    };
+
     let blob_ticket = parse_ticket(&ticket)?;
     let (node_addr, hash, format) = blob_ticket.into_parts();
 
@@ -357,7 +335,6 @@ async fn start_download(
         if !nid.is_empty() {
             match nid.parse::<PublicKey>() {
                 Ok(pk) => {
-                    // 使用ticket中的地址信息，但替换node_id
                     iroh::net::NodeAddr::from_parts(pk, node_addr.info.relay_url, node_addr.info.direct_addresses)
                 }
                 Err(_) => node_addr,
@@ -378,14 +355,14 @@ async fn start_download(
             DownloadOptions {
                 format,
                 nodes: vec![node_addr],
-                tag: iroh::blobs::util::SetTagOption::Auto,
+                tag: SetTagOption::Auto,
                 mode: DownloadMode::Direct,
             },
         )
         .await
         .map_err(|e| format!("启动下载失败: {}", e))?;
 
-    // 在后台任务中消费进度stream，通过Tauri事件推送
+    // 在后台任务中消费进度stream
     tokio::spawn(async move {
         let mut downloaded_size: u64 = 0;
         let mut blob_total_size: u64 = total_size;
@@ -472,7 +449,6 @@ async fn start_download(
                     }
                     DownloadProgress::AllDone(stats) => {
                         downloaded_size = stats.bytes_read;
-                        // 下载完成，导出文件
                         let export_result = export_downloaded_file(&iroh, hash, &final_path, format).await;
                         match export_result {
                             Ok(path) => {
@@ -507,7 +483,6 @@ async fn start_download(
             }
         }
 
-        // stream结束但没收到AllDone
         let _ = app.emit("download-progress", serde_json::json!({
             "status": "failed",
             "error": "下载意外结束",
@@ -557,7 +532,9 @@ fn check_download_status(state: State<'_, AppState>) -> Result<serde_json::Value
 fn main() {
     tauri::Builder::default()
         .manage(AppState {
-            iroh_node: Mutex::new(IrohNode { node_id: None }),
+            node: Mutex::new(None),
+            iroh_client: Mutex::new(None),
+            node_id: Mutex::new(None),
             download_active: Mutex::new(false),
         })
         .invoke_handler(tauri::generate_handler![
