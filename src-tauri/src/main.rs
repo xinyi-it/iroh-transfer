@@ -11,7 +11,6 @@ use iroh::blobs::get::db::DownloadProgress;
 use iroh::blobs::get::progress::BlobProgress;
 use iroh::blobs::BlobFormat;
 use iroh::base::ticket::BlobTicket;
-use iroh::net::key::PublicKey;
 use iroh::client::blobs::{DownloadMode, DownloadOptions, WrapOption};
 use iroh::blobs::util::SetTagOption;
 use iroh::base::node_addr::AddrInfoOptions;
@@ -256,6 +255,7 @@ async fn send_file(file_path: String, state: State<'_, AppState>) -> Result<serd
     let file_size = std::fs::metadata(&abs_path).map(|m| m.len()).unwrap_or(0);
 
     // 用 iroh SDK 添加文件
+    eprintln!("[DEBUG] send_file: adding file from path: {}", abs_path.display());
     let outcome = iroh.blobs().add_from_path(
         abs_path,
         false,
@@ -265,6 +265,7 @@ async fn send_file(file_path: String, state: State<'_, AppState>) -> Result<serd
     .finish().await.map_err(|e| format!("添加文件完成失败: {}", e))?;
 
     let hash = outcome.hash;
+    eprintln!("[DEBUG] send_file: hash = {}", hash);
 
     // 用 iroh SDK 生成 ticket
     let ticket = iroh.blobs().share(
@@ -272,6 +273,7 @@ async fn send_file(file_path: String, state: State<'_, AppState>) -> Result<serd
         BlobFormat::Raw,
         AddrInfoOptions::RelayAndAddresses,
     ).await.map_err(|e| format!("生成ticket失败: {}", e))?;
+    eprintln!("[DEBUG] send_file: ticket generated successfully");
 
     Ok(serde_json::json!({
         "blob_id": hash.to_string(),
@@ -327,7 +329,7 @@ fn compute_save_path(save_path: &str) -> String {
 #[tauri::command]
 async fn start_download(
     ticket: String,
-    node_id: Option<String>,
+    _node_id: Option<String>,  // 保留参数兼容前端，但不再使用
     save_path: String,
     total_size: u64,
     state: State<'_, AppState>,
@@ -344,22 +346,10 @@ async fn start_download(
 
     let blob_ticket = parse_ticket(&ticket)?;
     let (node_addr, hash, format) = blob_ticket.into_parts();
+    eprintln!("[DEBUG] start_download: node_addr={}, hash={}, format={}", node_addr.node_id, hash, format);
 
-    // 如果有额外的node_id参数，构建node_addr
-    let node_addr = if let Some(ref nid) = node_id {
-        if !nid.is_empty() {
-            match nid.parse::<PublicKey>() {
-                Ok(pk) => {
-                    iroh::net::NodeAddr::from_parts(pk, node_addr.info.relay_url, node_addr.info.direct_addresses)
-                }
-                Err(_) => node_addr,
-            }
-        } else {
-            node_addr
-        }
-    } else {
-        node_addr
-    };
+    // 直接使用 ticket 中的 node_addr（已包含正确的 relay + direct_addresses）
+    // 不再用前端传入的 nodeId 覆盖，避免地址不匹配
 
     let final_path = compute_save_path(&save_path);
     let effective_total_size = if total_size > 0 { total_size } else { 1 }; // 避免除零
@@ -415,108 +405,120 @@ async fn start_download(
                 Ok(Some(progress_item)) => {
                     last_progress_time = std::time::Instant::now();
                     match progress_item {
-                        Ok(progress) => match progress {
-                            DownloadProgress::InitialState(state) => {
-                                if state.connected {
+                        Ok(progress) => {
+                            eprintln!("[DEBUG] DownloadProgress event: {:?}", progress);
+                            match progress {
+                                DownloadProgress::InitialState(state) => {
+                                    if state.connected {
+                                        let _ = app.emit("download-progress", serde_json::json!({
+                                            "status": "downloading",
+                                            "downloaded_size": downloaded_size,
+                                            "total_size": blob_total_size
+                                        }));
+                                    }
+                                    if let Some(blob) = state.get_current() {
+                                        if let Some(size) = blob.size {
+                                            blob_total_size = size.value();
+                                        }
+                                        match blob.progress {
+                                            BlobProgress::Progressing(offset) => {
+                                                downloaded_size = offset;
+                                            }
+                                            BlobProgress::Done => {
+                                                downloaded_size = blob_total_size;
+                                            }
+                                            BlobProgress::Pending => {}
+                                        }
+                                    }
                                     let _ = app.emit("download-progress", serde_json::json!({
                                         "status": "downloading",
                                         "downloaded_size": downloaded_size,
                                         "total_size": blob_total_size
                                     }));
                                 }
-                                if let Some(blob) = state.get_current() {
-                                    if let Some(size) = blob.size {
-                                        blob_total_size = size.value();
-                                    }
-                                    match blob.progress {
-                                        BlobProgress::Progressing(offset) => {
-                                            downloaded_size = offset;
-                                        }
-                                        BlobProgress::Done => {
-                                            downloaded_size = blob_total_size;
-                                        }
-                                        BlobProgress::Pending => {}
-                                    }
+                                DownloadProgress::Connected => {
+                                    let _ = app.emit("download-progress", serde_json::json!({
+                                        "status": "downloading",
+                                        "downloaded_size": 0,
+                                        "total_size": blob_total_size
+                                    }));
                                 }
-                                let _ = app.emit("download-progress", serde_json::json!({
-                                    "status": "downloading",
-                                    "downloaded_size": downloaded_size,
-                                    "total_size": blob_total_size
-                                }));
-                            }
-                            DownloadProgress::Connected => {
-                                let _ = app.emit("download-progress", serde_json::json!({
-                                    "status": "downloading",
-                                    "downloaded_size": 0,
-                                    "total_size": blob_total_size
-                                }));
-                            }
-                            DownloadProgress::FoundHashSeq { children, .. } => {
-                                blob_total_size = effective_total_size.max(children as u64);
-                                let _ = app.emit("download-progress", serde_json::json!({
-                                    "status": "downloading",
-                                    "downloaded_size": downloaded_size,
-                                    "total_size": blob_total_size
-                                }));
-                            }
-                            DownloadProgress::Found { size, .. } => {
-                                blob_total_size = size;
-                                let _ = app.emit("download-progress", serde_json::json!({
-                                    "status": "downloading",
-                                    "downloaded_size": 0,
-                                    "total_size": blob_total_size
-                                }));
-                            }
-                            DownloadProgress::Progress { offset, .. } => {
-                                downloaded_size = offset;
-                                let _ = app.emit("download-progress", serde_json::json!({
-                                    "status": "downloading",
-                                    "downloaded_size": downloaded_size,
-                                    "total_size": blob_total_size
-                                }));
-                            }
-                            DownloadProgress::FoundLocal { .. } => {}
-                            DownloadProgress::Abort(e) => {
-                                let _ = app.emit("download-progress", serde_json::json!({
-                                    "status": "failed",
-                                    "error": format!("下载中止: {}", e),
-                                    "downloaded_size": downloaded_size,
-                                    "total_size": blob_total_size
-                                }));
-                                return;
-                            }
-                            DownloadProgress::Done { .. } => {
-                                downloaded_size = blob_total_size;
-                                let _ = app.emit("download-progress", serde_json::json!({
-                                    "status": "downloading",
-                                    "downloaded_size": downloaded_size,
-                                    "total_size": blob_total_size
-                                }));
-                            }
-                            DownloadProgress::AllDone(stats) => {
-                                downloaded_size = stats.bytes_read;
-                                let export_result = export_downloaded_file(&iroh, hash, &final_path, format).await;
-                                match export_result {
-                                    Ok(path) => {
-                                        let _ = app.emit("download-progress", serde_json::json!({
-                                            "status": "completed",
-                                            "save_path": path,
-                                            "downloaded_size": downloaded_size,
-                                            "total_size": blob_total_size
-                                        }));
-                                    }
-                                    Err(e) => {
-                                        let _ = app.emit("download-progress", serde_json::json!({
-                                            "status": "failed",
-                                            "error": e,
-                                            "downloaded_size": downloaded_size,
-                                            "total_size": blob_total_size
-                                        }));
-                                    }
+                                DownloadProgress::FoundHashSeq { children, .. } => {
+                                    blob_total_size = effective_total_size.max(children as u64);
+                                    let _ = app.emit("download-progress", serde_json::json!({
+                                        "status": "downloading",
+                                        "downloaded_size": downloaded_size,
+                                        "total_size": blob_total_size
+                                    }));
                                 }
-                                return;
+                                DownloadProgress::Found { size, .. } => {
+                                    blob_total_size = size;
+                                    let _ = app.emit("download-progress", serde_json::json!({
+                                        "status": "downloading",
+                                        "downloaded_size": 0,
+                                        "total_size": blob_total_size
+                                    }));
+                                }
+                                DownloadProgress::Progress { offset, .. } => {
+                                    downloaded_size = offset;
+                                    let _ = app.emit("download-progress", serde_json::json!({
+                                        "status": "downloading",
+                                        "downloaded_size": downloaded_size,
+                                        "total_size": blob_total_size
+                                    }));
+                                }
+                                DownloadProgress::FoundLocal { .. } => {
+                                    eprintln!("[DEBUG] FoundLocal - blob already exists locally");
+                                    let _ = app.emit("download-progress", serde_json::json!({
+                                        "status": "downloading",
+                                        "downloaded_size": blob_total_size,
+                                        "total_size": blob_total_size
+                                    }));
+                                }
+                                DownloadProgress::Abort(e) => {
+                                    let _ = app.emit("download-progress", serde_json::json!({
+                                        "status": "failed",
+                                        "error": format!("下载中止: {}", e),
+                                        "downloaded_size": downloaded_size,
+                                        "total_size": blob_total_size
+                                    }));
+                                    return;
+                                }
+                                DownloadProgress::Done { .. } => {
+                                    downloaded_size = blob_total_size;
+                                    let _ = app.emit("download-progress", serde_json::json!({
+                                        "status": "downloading",
+                                        "downloaded_size": downloaded_size,
+                                        "total_size": blob_total_size
+                                    }));
+                                }
+                                DownloadProgress::AllDone(stats) => {
+                                    eprintln!("[DEBUG] AllDone - bytes_read: {}, stats: {:?}", stats.bytes_read, stats);
+                                    downloaded_size = stats.bytes_read;
+                                    let export_result = export_downloaded_file(&iroh, hash, &final_path, format).await;
+                                    eprintln!("[DEBUG] export result: {:?}", export_result);
+                                    match export_result {
+                                        Ok(path) => {
+                                            let _ = app.emit("download-progress", serde_json::json!({
+                                                "status": "completed",
+                                                "save_path": path,
+                                                "downloaded_size": downloaded_size,
+                                                "total_size": blob_total_size
+                                            }));
+                                        }
+                                        Err(e) => {
+                                            let _ = app.emit("download-progress", serde_json::json!({
+                                                "status": "failed",
+                                                "error": e,
+                                                "downloaded_size": downloaded_size,
+                                                "total_size": blob_total_size
+                                            }));
+                                        }
+                                    }
+                                    return;
+                                }
                             }
-                        },
+                        }
                         Err(e) => {
                             let _ = app.emit("download-progress", serde_json::json!({
                                 "status": "failed",
