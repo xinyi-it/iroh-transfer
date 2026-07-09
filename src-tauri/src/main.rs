@@ -25,97 +25,16 @@ struct AppState {
     download_active: Mutex<bool>,
 }
 
-fn get_iroh_path() -> Result<String, String> {
-    if let Ok(path) = std::env::var("IROH_PATH") {
-        if std::path::Path::new(&path).exists() {
-            return Ok(path);
-        }
-    }
-    if let Ok(exe_dir) = std::env::current_exe() {
-        let bin_path = exe_dir
-            .parent()
-            .and_then(|p| p.parent())
-            .map(|p| p.join("binaries").join("iroh"));
-        if let Some(ref bp) = bin_path {
-            if bp.exists() {
-                return Ok(bp.to_string_lossy().to_string());
-            }
-        }
-    }
-    if let Ok(home) = std::env::var("HOME") {
-        let p = std::path::PathBuf::from(&home)
-            .join(".cargo")
-            .join("bin")
-            .join("iroh");
-        if p.exists() {
-            return Ok(p.to_string_lossy().to_string());
-        }
-    }
-    let output = std::process::Command::new("which")
-        .arg("iroh")
-        .output()
-        .map_err(|e| format!("查找iroh失败: {}", e))?;
-    if output.status.success() {
-        let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        if !path.is_empty() {
-            return Ok(path);
-        }
-    }
-    Err("未找到iroh，请先安装: cargo install iroh-cli".to_string())
-}
-
 #[tauri::command]
 fn check_dependencies() -> Result<serde_json::Value, String> {
-    let iroh_found = get_iroh_path().ok();
-
-    let cargo_found = std::process::Command::new("cargo")
-        .arg("--version")
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false);
-
-    let iroh_version = if let Some(ref path) = iroh_found {
-        std::process::Command::new(path)
-            .arg("--version")
-            .output()
-            .ok()
-            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-    } else {
-        None
-    };
-
-    let install_guide = if cfg!(target_os = "macos") {
-        if !cargo_found {
-            "1. 安装Rust: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh\n2. 安装iroh: cargo install iroh-cli"
-        } else {
-            "在终端运行: cargo install iroh-cli"
-        }
-    } else if cfg!(target_os = "windows") {
-        if !cargo_found {
-            "1. 安装Rust: 访问 https://rustup.rs 下载安装\n2. 安装iroh: cargo install iroh-cli"
-        } else {
-            "在终端运行: cargo install iroh-cli"
-        }
-    } else {
-        if !cargo_found {
-            "1. 安装Rust: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh\n2. 安装iroh: cargo install iroh-cli\n3. 安装依赖: sudo apt install build-essential pkg-config libssl-dev"
-        } else {
-            "在终端运行: cargo install iroh-cli"
-        }
-    };
-
+    // 应用通过 iroh Rust SDK 在进程内直接启动节点，不依赖外部 iroh CLI
     Ok(serde_json::json!({
-        "iroh_found": iroh_found.is_some(),
-        "iroh_path": iroh_found.unwrap_or_default(),
-        "iroh_version": iroh_version.unwrap_or_default(),
-        "cargo_found": cargo_found,
-        "install_guide": install_guide
+        "iroh_found": true,
+        "iroh_path": "",
+        "iroh_version": "SDK 0.28 (in-process)",
+        "cargo_found": true,
+        "install_guide": ""
     }))
-}
-
-#[tauri::command]
-fn get_iroh_binary_path() -> Result<String, String> {
-    get_iroh_path()
 }
 
 #[tauri::command]
@@ -129,7 +48,9 @@ fn pick_file() -> Result<Option<String>, String> {
 
 #[tauri::command]
 fn get_home_dir() -> Result<String, String> {
-    std::env::var("HOME").map_err(|e| format!("无法获取HOME: {}", e))
+    dirs::home_dir()
+        .map(|p| p.to_string_lossy().to_string())
+        .ok_or_else(|| "无法获取用户主目录".to_string())
 }
 
 #[tauri::command]
@@ -617,7 +538,6 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             check_dependencies,
-            get_iroh_binary_path,
             pick_file,
             get_home_dir,
             start_node,
