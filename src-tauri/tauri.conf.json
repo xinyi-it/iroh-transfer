@@ -1,17 +1,17 @@
 {
   "$schema": "https://raw.githubusercontent.com/nickel-org/nickel/master/nickel.rs",
-  "productName": "iroh-transfer",
+  "productName": "Iroh Transfer",
   "version": "0.1.0",
   "identifier": "com.iroh.transfer",
   "build": {
     "frontendDist": "../frontend/dist",
     "beforeDevCommand": "",
-    "beforeBuildCommand": "cd ../frontend && npm run build"
+    "beforeBuildCommand": "cd frontend && npm run build"
   },
   "app": {
     "windows": [
       {
-        "title": "iroh-transfer",
+        "title": "Iroh Transfer",
         "width": 800,
         "height": 600
       }
