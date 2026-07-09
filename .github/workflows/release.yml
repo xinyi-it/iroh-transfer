@@ -16,6 +16,8 @@ jobs:
         include:
           - platform: macos-14       # Apple Silicon (arm64)
             args: '--target aarch64-apple-darwin'
+          - platform: macos-14       # Intel (x86_64)，用 macos-14 交叉编译避免 macos-13 排队
+            args: '--target x86_64-apple-darwin'
           - platform: ubuntu-22.04   # Linux (仅 deb)
             args: '--bundles deb'
           - platform: windows-latest # Windows
@@ -36,7 +38,7 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.platform == 'macos-14' && 'aarch64-apple-darwin' || '' }}
+          targets: ${{ matrix.platform == 'macos-14' && 'aarch64-apple-darwin x86_64-apple-darwin' || '' }}
 
       - name: Install Linux dependencies
         if: matrix.platform == 'ubuntu-22.04'
