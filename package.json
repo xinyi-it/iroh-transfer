@@ -4,7 +4,8 @@
   "description": "P2P file transfer powered by iroh",
   "scripts": {
     "dev": "tauri dev",
-    "build": "tauri build"
+    "build": "tauri build",
+    "tauri": "tauri"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2",
