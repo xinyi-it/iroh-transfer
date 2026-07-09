@@ -42,13 +42,13 @@ npm run build
 
 产物位于 `src-tauri/target/release/bundle/`：
 
-- **macOS**：`Iroh Transfer.app` 和 `Iroh Transfer_0.1.0_x64.dmg`
+- **macOS**：`Iroh Transfer.app` 和 `Iroh Transfer_0.1.0_aarch64.dmg`（或 `_x64.dmg`，取决于构建机器架构）
 - **Windows**：`.msi` / `.exe`（NSIS）
-- **Linux**：`.deb` / `.AppImage` / `.rpm`
+- **Linux**：`.deb`
 
 ## 自动发布
 
-项目配置了 GitHub Actions（`.github/workflows/release.yml`），推送 `v*` 格式的 tag 时自动构建三平台安装包并发布 Release。
+项目配置了 GitHub Actions（`.github/workflows/release.yml`），推送 `v*` 格式的 tag 时自动构建多平台安装包并发布 Release。
 
 ```bash
 # 打 tag 触发自动打包发布
@@ -58,14 +58,14 @@ git push origin v0.1.0
 
 构建矩阵：
 
-| 平台 | 产物 |
-|------|------|
-| macOS (Apple Silicon) | `.dmg` |
-| macOS (Intel) | `.dmg` |
-| Ubuntu | `.deb` / `.AppImage` |
-| Windows | `.msi` / `.exe` |
+| 平台 | 架构 | 产物 | 适用设备 |
+|------|------|------|----------|
+| macOS | arm64 | `Iroh Transfer_0.1.0_aarch64.dmg` | M1/M2/M3/M4 |
+| macOS | x86_64 | `Iroh Transfer_0.1.0_x64.dmg` | Intel Mac |
+| Linux | x86_64 | `iroh-transfer_0.1.0_amd64.deb` | Debian/Ubuntu |
+| Windows | x86_64 | `.msi` / `.exe` | Windows |
 
-> Release 默认为草稿状态，需在 GitHub Release 页面手动发布。
+> macOS 两个架构都用 macos-14 runner 构建以避免 Intel runner 排队，Release 默认为草稿状态，需在 GitHub Release 页面手动发布。
 
 ## 使用方法
 
