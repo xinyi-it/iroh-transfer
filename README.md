@@ -2,6 +2,19 @@
 
 基于 [iroh](https://iroh.computer) 的 P2P 文件传输桌面应用，使用 Tauri 2 构建。
 
+## 下载安装
+
+最新版本 **v0.1.3** 下载地址：https://github.com/xinyi-it/iroh-transfer/releases/tag/v0.1.3
+
+| 平台 | 安装包 | 适用设备 |
+|------|--------|----------|
+| macOS (arm64) | `Iroh.Transfer_0.1.3_aarch64.dmg` | M1/M2/M3/M4 |
+| macOS (x86_64) | `Iroh.Transfer_0.1.3_x64.dmg` | Intel Mac |
+| Linux | `Iroh.Transfer_0.1.3_amd64.deb` | Debian/Ubuntu |
+| Windows | `Iroh.Transfer_0.1.3_x64-setup.exe` | Windows |
+
+下载后双击安装即可运行，无需安装任何额外依赖。
+
 ## 功能特性
 
 - **P2P 直连传输**：文件不经过服务器，端到端加密
