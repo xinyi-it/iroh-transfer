@@ -66,4 +66,4 @@ jobs:
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}
-          updaterJsonPreferTag: true
+          includeUpdaterJson: true
