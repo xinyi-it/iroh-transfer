@@ -456,6 +456,10 @@ async fn start_download(
                                     downloaded_size = stats.bytes_read;
                                     let export_result = export_downloaded_file(&iroh, hash, &final_path, format).await;
                                     eprintln!("[DEBUG] export result: {:?}", export_result);
+                                    // 导出完成后删除 blob store 中的副本，避免磁盘占用累积
+                                    if let Err(e) = iroh.blobs().delete_blob(hash).await {
+                                        eprintln!("[WARN] 清理下载 blob 失败: {}", e);
+                                    }
                                     match export_result {
                                         Ok(path) => {
                                             let _ = app.emit("download-progress", serde_json::json!({
