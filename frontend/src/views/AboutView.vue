@@ -59,7 +59,7 @@ import { check } from '@tauri-apps/plugin-updater'
 import { invoke } from '../api/tauri'
 
 const router = useRouter()
-const version = ref('0.1.5')
+const version = ref('0.1.6')
 const checking = ref(false)
 const updating = ref(false)
 const hasUpdate = ref(false)

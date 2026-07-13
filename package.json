@@ -1,6 +1,6 @@
 {
   "name": "iroh-transfer",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "P2P file transfer powered by iroh",
   "scripts": {
     "dev": "tauri dev",
