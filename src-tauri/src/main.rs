@@ -571,8 +571,27 @@ fn check_download_status(state: State<'_, AppState>) -> Result<serde_json::Value
 }
 
 #[tauri::command]
-async fn clear_cache(state: State<'_, AppState>) -> Result<serde_json::Value, String> {
-    let iroh = {
+fn open_external(url: String) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open").arg(&url).spawn()
+            .map_err(|e| format!("打开链接失败: {}", e))?;
+    }
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("cmd").args(["/c", "start", "", &url]).spawn()
+            .map_err(|e| format!("打开链接失败: {}", e))?;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        std::process::Command::new("xdg-open").arg(&url).spawn()
+            .map_err(|e| format!("打开链接失败: {}", e))?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn clear_cache(state: State<'_, AppState>) -> Result<serde_json::Value, String> {    let iroh = {
         let guard = state.iroh_client.lock().map_err(|e| e.to_string())?;
         guard.as_ref()
             .ok_or("iroh节点未启动")
@@ -624,7 +643,8 @@ fn main() {
             send_file,
             start_download,
             check_download_status,
-            clear_cache
+            clear_cache,
+            open_external
         ])
         .setup(|_app| Ok(()))
         .run(tauri::generate_context!())

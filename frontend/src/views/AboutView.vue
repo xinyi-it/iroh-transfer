@@ -1,7 +1,7 @@
 <template>
   <div class="about-container">
     <div class="about-card">
-      <img src="/favicon.ico" alt="logo" class="about-logo" />
+      <img :src="appIcon" alt="logo" class="about-logo" />
       <h1 class="about-title">Iroh Transfer</h1>
       <p class="about-version">版本 {{ version }}</p>
       <p class="about-desc">基于 iroh 的 P2P 文件传输桌面应用</p>
@@ -39,9 +39,9 @@
       </div>
 
       <div class="about-links">
-        <a href="https://github.com/xinyi-it/iroh-transfer" target="_blank">GitHub 仓库</a>
+        <a href="#" @click.prevent="openLink('https://github.com/xinyi-it/iroh-transfer')">GitHub 仓库</a>
         <span class="link-divider">|</span>
-        <a href="https://github.com/xinyi-it/iroh-transfer/releases" target="_blank">下载页面</a>
+        <a href="#" @click.prevent="openLink('https://github.com/xinyi-it/iroh-transfer/releases')">下载页面</a>
       </div>
 
       <el-button @click="goBack" style="margin-top: 16px; width: 100%">
@@ -59,13 +59,22 @@ import { check } from '@tauri-apps/plugin-updater'
 import { invoke } from '../api/tauri'
 
 const router = useRouter()
-const version = ref('0.1.6')
+const appIcon = '/icon.png'
+const version = ref('0.1.7')
 const checking = ref(false)
 const updating = ref(false)
 const hasUpdate = ref(false)
 const updateStatus = ref('')
 const updateStatusClass = ref('')
 const updateProgress = ref(0)
+
+async function openLink(url: string) {
+  try {
+    await invoke('open_external', { url })
+  } catch {
+    window.open(url, '_blank')
+  }
+}
 
 async function checkUpdate() {
   checking.value = true
