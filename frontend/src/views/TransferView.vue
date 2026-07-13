@@ -101,11 +101,22 @@
 
             <!-- 发送结果 -->
             <div v-if="sendResult" class="result-area">
-              <el-descriptions :column="1" border size="small">
-                <el-descriptions-item label="文件">{{ sendResult.file_name }}</el-descriptions-item>
-                <el-descriptions-item label="大小">{{ formatSize(sendResult.file_size) }}</el-descriptions-item>
-              </el-descriptions>
-              <p class="ticket-hint">把以下内容发给对方：</p>
+              <div class="file-info">
+                <div class="file-info-row">
+                  <span class="file-info-label">文件</span>
+                  <div class="file-info-value">{{ sendResult.file_name }}</div>
+                </div>
+                <div class="file-info-row">
+                  <span class="file-info-label">大小</span>
+                  <span class="file-info-value">{{ formatSize(sendResult.file_size) }}</span>
+                </div>
+              </div>
+              <div class="ticket-header">
+                <span class="ticket-hint">把以下内容发给对方：</span>
+                <el-button type="primary" plain size="small" @click="copyTicket">
+                  {{ copyBtnText }}
+                </el-button>
+              </div>
               <el-input
                 v-model="sendContent"
                 type="textarea"
@@ -113,9 +124,6 @@
                 readonly
                 class="ticket-box"
               />
-              <el-button type="primary" plain size="small" @click="copyTicket" style="margin-top:8px">
-                {{ copyBtnText }}
-              </el-button>
             </div>
           </el-card>
         </el-col>
@@ -190,11 +198,11 @@
     </el-main>
 
     <!-- 传输历史 -->
-    <el-footer class="history-panel" height="auto">
+    <div class="history-panel">
       <div class="history-header">📋 传输历史</div>
       <div class="history-list" v-if="history.items.length">
         <el-tag
-          v-for="(h, i) in history.items.slice(0, 10)"
+          v-for="(h, i) in history.items"
           :key="i"
           :type="h.status === '成功' ? 'success' : 'danger'"
           effect="plain"
@@ -205,7 +213,7 @@
         </el-tag>
       </div>
       <div v-else class="history-empty">暂无记录</div>
-    </el-footer>
+    </div>
   </div>
 </template>
 
@@ -630,8 +638,16 @@ async function receiveFile() {
   margin-top: 14px;
 }
 
+.ticket-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 10px 0;
+  padding: 0;
+}
+
 .ticket-hint {
-  margin: 10px 0 6px;
+  margin: 0;
   color: #8b949e;
   font-size: 13px;
 }
@@ -675,9 +691,7 @@ async function receiveFile() {
 .history-panel {
   background: #161b22;
   border-top: 1px solid #30363d;
-  padding: 12px 20px !important;
-  max-height: 150px;
-  overflow-y: auto;
+  padding: 12px 20px;
 }
 
 .history-header {
@@ -688,12 +702,24 @@ async function receiveFile() {
 
 .history-list {
   display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 150px;
+  overflow-y: auto;
 }
 
 .history-tag {
   font-size: 12px;
+  width: fit-content;
+}
+
+.history-list::-webkit-scrollbar {
+  width: 6px;
+}
+
+.history-list::-webkit-scrollbar-thumb {
+  background: #30363d;
+  border-radius: 3px;
 }
 
 .history-empty {
@@ -721,6 +747,50 @@ async function receiveFile() {
 :deep(.el-descriptions__body) {
   background-color: #0d1117;
   color: #c9d1d9;
+}
+
+.file-info {
+  border: 1px solid #30363d;
+  border-radius: 4px;
+  padding: 8px 12px;
+  background: #0d1117;
+}
+
+.file-info-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 4px 0;
+}
+
+.file-info-row + .file-info-row {
+  border-top: 1px solid #30363d;
+}
+
+.file-info-label {
+  flex-shrink: 0;
+  width: 40px;
+  color: #8b949e;
+  font-size: 13px;
+}
+
+.file-info-value {
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  white-space: nowrap;
+  color: #58a6ff;
+  font-size: 13px;
+  font-family: monospace;
+}
+
+.file-info-value::-webkit-scrollbar {
+  height: 6px;
+}
+
+.file-info-value::-webkit-scrollbar-thumb {
+  background: #30363d;
+  border-radius: 3px;
 }
 
 :deep(.el-progress-bar__outer) {
