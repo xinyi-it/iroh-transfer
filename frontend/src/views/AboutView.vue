@@ -60,7 +60,7 @@ import { invoke } from '../api/tauri'
 
 const router = useRouter()
 const appIcon = '/icon.png'
-const version = ref('0.1.7')
+const version = ref('0.1.8')
 const checking = ref(false)
 const updating = ref(false)
 const hasUpdate = ref(false)
@@ -117,9 +117,8 @@ async function downloadAndInstall() {
         updateProgress.value = 100
       }
     })
-    updateStatus.value = '更新下载完成，即将重启安装...'
+    updateStatus.value = '更新完成，即将重启...'
     updateStatusClass.value = 'success'
-    await update.install()
     await invoke('relaunch')
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e)

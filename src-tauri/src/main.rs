@@ -3,7 +3,7 @@
 
 use std::sync::Mutex;
 use std::str::FromStr;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 use iroh::client::Iroh;
 use iroh::node::Node;
 use iroh::blobs::store::fs::Store as FsStore;
@@ -591,6 +591,11 @@ fn open_external(url: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn relaunch(app: AppHandle) {
+    app.restart();
+}
+
+#[tauri::command]
 async fn clear_cache(state: State<'_, AppState>) -> Result<serde_json::Value, String> {    let iroh = {
         let guard = state.iroh_client.lock().map_err(|e| e.to_string())?;
         guard.as_ref()
@@ -644,7 +649,8 @@ fn main() {
             start_download,
             check_download_status,
             clear_cache,
-            open_external
+            open_external,
+            relaunch
         ])
         .setup(|_app| Ok(()))
         .run(tauri::generate_context!())

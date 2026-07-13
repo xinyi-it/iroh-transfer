@@ -3206,7 +3206,7 @@ dependencies = [
 
 [[package]]
 name = "iroh-transfer"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "dirs",
  "futures-lite",
