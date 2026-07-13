@@ -13,6 +13,7 @@ use iroh::blobs::BlobFormat;
 use iroh::base::ticket::BlobTicket;
 use iroh::client::blobs::{DownloadMode, DownloadOptions, WrapOption};
 use iroh::blobs::util::SetTagOption;
+use iroh::blobs::provider::AddProgress;
 use iroh::base::node_addr::AddrInfoOptions;
 use futures_lite::StreamExt;
 
@@ -154,7 +155,7 @@ async fn stop_node(state: State<'_, AppState>) -> Result<(), String> {
 }
 
 #[tauri::command]
-async fn send_file(file_path: String, state: State<'_, AppState>) -> Result<serde_json::Value, String> {
+async fn send_file(file_path: String, state: State<'_, AppState>, app: AppHandle) -> Result<serde_json::Value, String> {
     let iroh = {
         let guard = state.iroh_client.lock().map_err(|e| e.to_string())?;
         guard.as_ref()
@@ -175,17 +176,54 @@ async fn send_file(file_path: String, state: State<'_, AppState>) -> Result<serd
         .unwrap_or("downloaded".to_string());
     let file_size = std::fs::metadata(&abs_path).map(|m| m.len()).unwrap_or(0);
 
-    // 用 iroh SDK 添加文件
+    // 用 iroh SDK 添加文件，消费 AddProgress stream 推送进度
     eprintln!("[DEBUG] send_file: adding file from path: {}", abs_path.display());
-    let outcome = iroh.blobs().add_from_path(
+    let mut stream = iroh.blobs().add_from_path(
         abs_path,
         false,
         SetTagOption::Auto,
         WrapOption::NoWrap,
-    ).await.map_err(|e| format!("添加文件失败: {}", e))?
-    .finish().await.map_err(|e| format!("添加文件完成失败: {}", e))?;
+    ).await.map_err(|e| format!("添加文件失败: {}", e))?;
 
-    let hash = outcome.hash;
+    let mut total_size = file_size;
+    let mut final_hash = None;
+
+    while let Some(item) = stream.next().await {
+        match item {
+            Ok(AddProgress::Found { size, .. }) => {
+                total_size = size;
+                let _ = app.emit("send-progress", serde_json::json!({
+                    "status": "processing",
+                    "processed": 0,
+                    "total": total_size
+                }));
+            }
+            Ok(AddProgress::Progress { offset, .. }) => {
+                let pct = if total_size > 0 { offset * 100 / total_size } else { 0 };
+                let _ = app.emit("send-progress", serde_json::json!({
+                    "status": "processing",
+                    "processed": offset,
+                    "total": total_size,
+                    "percentage": pct
+                }));
+            }
+            Ok(AddProgress::AllDone { hash, .. }) => {
+                final_hash = Some(hash);
+                let _ = app.emit("send-progress", serde_json::json!({
+                    "status": "done"
+                }));
+            }
+            Ok(AddProgress::Abort(e)) => {
+                return Err(format!("添加文件失败: {}", e));
+            }
+            Ok(_) => {}
+            Err(e) => {
+                return Err(format!("添加文件出错: {}", e));
+            }
+        }
+    }
+
+    let hash = final_hash.ok_or("添加文件未完成")?;
     eprintln!("[DEBUG] send_file: hash = {}", hash);
 
     // 用 iroh SDK 生成 ticket

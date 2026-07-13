@@ -89,7 +89,14 @@
 
             <div v-else class="drop-zone loading">
               <el-icon :size="40" class="is-loading"><Loading /></el-icon>
-              <p class="drop-text">上传中...</p>
+              <p class="drop-text">{{ sendProgressText }}</p>
+              <div v-if="sending && sendProgressTotal > 0" class="send-progress-bar">
+                <el-progress
+                  :percentage="sendProgressPct"
+                  :stroke-width="8"
+                  :show-text="true"
+                />
+              </div>
             </div>
 
             <!-- 发送结果 -->
@@ -324,10 +331,16 @@ const sending = ref(false)
 const sendResult = ref<SendFileResult | null>(null)
 const sendContent = ref('')
 const copyBtnText = ref('复制发送内容')
+const sendProgressPct = ref(0)
+const sendProgressTotal = ref(0)
+const sendProgressText = ref('处理中...')
 
 async function pickAndSend() {
   sending.value = true
   sendResult.value = null
+  sendProgressPct.value = 0
+  sendProgressTotal.value = 0
+  sendProgressText.value = '处理中...'
   try {
     const filePath = await invoke<string>('pick_file')
     if (!filePath) { sending.value = false; return }
@@ -370,7 +383,8 @@ const receiveSuccess = ref(false)
 let parsedNodeId = ''
 let parsedFileSize = 0
 let parsedTicket = ''
-let unlisten: (() => void) | null = null
+let unlistenDownload: (() => void) | null = null
+let unlistenSend: (() => void) | null = null
 
 const canReceive = computed(() => nodeOnline.value && ticketInput.value.trim() && !receiving.value)
 
@@ -420,7 +434,23 @@ function onDownloadProgress(info: DownloadProgress) {
 }
 
 onMounted(async () => {
-  unlisten = await listen<DownloadProgress>('download-progress', onDownloadProgress)
+  unlistenDownload = await listen<DownloadProgress>('download-progress', onDownloadProgress)
+  unlistenSend = await listen<{
+    status: string
+    processed: number
+    total: number
+    percentage: number
+  }>('send-progress', (info) => {
+    if (info.status === 'processing') {
+      sendProgressTotal.value = info.total
+      const pct = info.percentage || (info.total > 0 ? Math.min(Math.round(info.processed / info.total * 100), 99) : 0)
+      sendProgressPct.value = pct
+      sendProgressText.value = `正在处理文件... ${formatSize(info.processed)} / ${formatSize(info.total)} (${pct}%)`
+    } else if (info.status === 'done') {
+      sendProgressPct.value = 100
+      sendProgressText.value = '正在生成票据...'
+    }
+  })
   // 自动启动节点
   setTimeout(async () => {
     if (!nodeOnline.value && !nodeStarting.value) {
@@ -430,7 +460,8 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
-  if (unlisten) { unlisten(); unlisten = null }
+  if (unlistenDownload) { unlistenDownload(); unlistenDownload = null }
+  if (unlistenSend) { unlistenSend(); unlistenSend = null }
 })
 
 function progressFormat(percentage: number) {
@@ -573,6 +604,15 @@ async function receiveFile() {
 
 .drop-zone.loading {
   cursor: wait;
+}
+
+.send-progress-bar {
+  margin-top: 12px;
+  padding: 0 20px;
+}
+
+.send-progress-bar :deep(.el-progress-bar__outer) {
+  background-color: #21262d;
 }
 
 .drop-text {
