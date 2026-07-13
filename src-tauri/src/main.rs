@@ -570,6 +570,42 @@ fn check_download_status(state: State<'_, AppState>) -> Result<serde_json::Value
     }))
 }
 
+#[tauri::command]
+async fn clear_cache(state: State<'_, AppState>) -> Result<serde_json::Value, String> {
+    let iroh = {
+        let guard = state.iroh_client.lock().map_err(|e| e.to_string())?;
+        guard.as_ref()
+            .ok_or("iroh节点未启动")
+            .map(|i| i.clone())?
+    };
+
+    // 获取所有 blob 的 hash，逐个删除
+    let mut deleted_count = 0u64;
+    let mut deleted_bytes = 0u64;
+    let blobs = iroh.blobs().list().await
+        .map_err(|e| format!("获取blob列表失败: {}", e))?;
+    use futures_lite::StreamExt;
+    let mut blobs = blobs;
+    while let Some(blob) = blobs.next().await {
+        if let Ok(entry) = blob {
+            let hash = entry.hash;
+            let size = entry.size;
+            if let Err(e) = iroh.blobs().delete_blob(hash).await {
+                eprintln!("[WARN] 删除blob {} 失败: {}", hash, e);
+            } else {
+                deleted_count += 1;
+                deleted_bytes += size;
+            }
+        }
+    }
+
+    eprintln!("[DEBUG] clear_cache: 删除 {} 个blob, 共 {} 字节", deleted_count, deleted_bytes);
+    Ok(serde_json::json!({
+        "deleted_count": deleted_count,
+        "deleted_bytes": deleted_bytes
+    }))
+}
+
 fn main() {
     tauri::Builder::default()
         .manage(AppState {
@@ -586,7 +622,8 @@ fn main() {
             stop_node,
             send_file,
             start_download,
-            check_download_status
+            check_download_status,
+            clear_cache
         ])
         .setup(|_app| Ok(()))
         .run(tauri::generate_context!())

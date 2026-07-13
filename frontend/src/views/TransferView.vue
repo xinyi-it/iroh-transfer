@@ -59,6 +59,13 @@
         >
           {{ nodeStopping ? '停止中...' : '停止节点' }}
         </el-button>
+        <el-button
+          :loading="clearingCache"
+          @click="clearCache"
+          size="small"
+        >
+          {{ clearingCache ? '清理中...' : '🧹 清理缓存' }}
+        </el-button>
       </template>
     </el-header>
 
@@ -263,6 +270,30 @@ const nodeStarting = ref(false)
 const nodeStopping = ref(false)
 const nodeRestarting = ref(false)
 const nodeId = ref('')
+const clearingCache = ref(false)
+
+async function clearCache() {
+  try {
+    await ElMessageBox.confirm('确定清理本地缓存？清理后已生成的发送票据将失效。', '清理确认', {
+      confirmButtonText: '确定清理',
+      cancelButtonText: '取消',
+      type: 'warning',
+    })
+  } catch {
+    return
+  }
+  clearingCache.value = true
+  try {
+    const result = await invoke<{ deleted_count: number; deleted_bytes: number }>('clear_cache')
+    const sizeStr = formatSize(result.deleted_bytes)
+    ElMessage.success(`已清理 ${result.deleted_count} 个缓存，释放 ${sizeStr}`)
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e)
+    ElMessage.error('清理失败: ' + msg)
+  } finally {
+    clearingCache.value = false
+  }
+}
 
 async function startNode() {
   nodeStarting.value = true
