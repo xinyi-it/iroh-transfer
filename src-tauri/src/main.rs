@@ -608,6 +608,7 @@ async fn clear_cache(state: State<'_, AppState>) -> Result<serde_json::Value, St
 
 fn main() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(AppState {
             node: Mutex::new(None),
             iroh_client: Mutex::new(None),

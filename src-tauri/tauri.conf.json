@@ -23,6 +23,7 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "createUpdaterArtifacts": true,
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -31,5 +32,13 @@
       "icons/icon.ico"
     ],
     "resources": []
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEZDOTVBQjk3ODk4MTQ3Q0IKUldUTFI0R0psNnVWL1AyU3lBZ21vb1BTSHR5RFdsS25JVi8vaW45WWhJYXBTR0lJVVU1OEw2cDMK",
+      "endpoints": [
+        "https://github.com/xinyi-it/iroh-transfer/releases/latest/download/latest.json"
+      ]
+    }
   }
 }

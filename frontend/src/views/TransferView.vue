@@ -66,6 +66,9 @@
         >
           {{ clearingCache ? '清理中...' : '🧹 清理缓存' }}
         </el-button>
+        <el-button @click="router.push('/about')" size="small">
+          关于
+        </el-button>
       </template>
     </el-header>
 
@@ -226,6 +229,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { useRouter } from 'vue-router'
 import { UploadFilled, Loading, WarningFilled } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { invoke, listen } from '../api/tauri'
@@ -234,6 +238,7 @@ import { formatSize, parseTicketInput } from '../utils'
 import { useHistoryStore } from '../stores/history'
 
 const history = useHistoryStore()
+const router = useRouter()
 
 // === 依赖检测 ===
 const depChecked = ref(false)
