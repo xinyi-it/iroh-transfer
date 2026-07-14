@@ -90,11 +90,12 @@
             <div
               v-else-if="!sending"
               class="drop-zone"
+              :class="{ 'drag-over': dragOver }"
               @click="pickAndSend"
             >
               <el-icon :size="40" color="#58a6ff"><UploadFilled /></el-icon>
-              <p class="drop-text">点击选择文件</p>
-              <p class="drop-hint">弹出文件选择对话框</p>
+              <p class="drop-text">{{ dragOver ? '松开鼠标即可上传' : '点击选择文件' }}</p>
+              <p class="drop-hint">{{ dragOver ? '支持拖拽文件到此处' : '点击或拖拽文件到此处' }}</p>
             </div>
 
             <div v-else class="drop-zone loading">
@@ -230,6 +231,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
+import { getCurrentWebview } from '@tauri-apps/api/webview'
 import { UploadFilled, Loading, WarningFilled } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { invoke, listen } from '../api/tauri'
@@ -378,17 +380,15 @@ const copyBtnText = ref('复制发送内容')
 const sendProgressPct = ref(0)
 const sendProgressTotal = ref(0)
 const sendProgressText = ref('处理中...')
+const dragOver = ref(false)
 
-async function pickAndSend() {
+async function sendFileWithPath(filePath: string) {
   sending.value = true
   sendResult.value = null
   sendProgressPct.value = 0
   sendProgressTotal.value = 0
   sendProgressText.value = '处理中...'
   try {
-    const filePath = await invoke<string>('pick_file')
-    if (!filePath) { sending.value = false; return }
-
     const result = await invoke<SendFileResult>('send_file', { filePath })
     sendResult.value = result
     sendContent.value = `iroh://${result.file_name}|${result.node_id}|${result.file_size}|${result.ticket}`
@@ -399,6 +399,17 @@ async function pickAndSend() {
     ElMessage.error('上传失败: ' + msg)
   } finally {
     sending.value = false
+  }
+}
+
+async function pickAndSend() {
+  try {
+    const filePath = await invoke<string>('pick_file')
+    if (!filePath) return
+    await sendFileWithPath(filePath)
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e)
+    ElMessage.error('选择文件失败: ' + msg)
   }
 }
 
@@ -429,6 +440,7 @@ let parsedFileSize = 0
 let parsedTicket = ''
 let unlistenDownload: (() => void) | null = null
 let unlistenSend: (() => void) | null = null
+let unlistenDragDrop: (() => void) | null = null
 
 const canReceive = computed(() => nodeOnline.value && ticketInput.value.trim() && !receiving.value)
 
@@ -501,11 +513,27 @@ onMounted(async () => {
       await startNode()
     }
   }, 2000)
+
+  // 拖拽文件上传
+  unlistenDragDrop = await getCurrentWebview().onDragDropEvent((event) => {
+    if (event.payload.type === 'enter' || event.payload.type === 'over') {
+      dragOver.value = true
+    } else if (event.payload.type === 'leave') {
+      dragOver.value = false
+    } else if (event.payload.type === 'drop' && !sending.value && nodeOnline.value) {
+      dragOver.value = false
+      const paths = event.payload.paths
+      if (paths && paths.length > 0 && paths[0]) {
+        sendFileWithPath(paths[0])
+      }
+    }
+  })
 })
 
 onUnmounted(() => {
   if (unlistenDownload) { unlistenDownload(); unlistenDownload = null }
   if (unlistenSend) { unlistenSend(); unlistenSend = null }
+  if (unlistenDragDrop) { unlistenDragDrop(); unlistenDragDrop = null }
 })
 
 function progressFormat(percentage: number) {
@@ -644,6 +672,13 @@ async function receiveFile() {
 .drop-zone:hover {
   border-color: #58a6ff;
   background: rgba(88, 166, 255, 0.05);
+}
+
+.drop-zone.drag-over {
+  border-color: #3fb950;
+  border-style: solid;
+  border-width: 2px;
+  background: rgba(63, 185, 80, 0.1);
 }
 
 .drop-zone.loading {
