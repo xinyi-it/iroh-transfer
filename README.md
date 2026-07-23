@@ -1,4 +1,4 @@
-# Iroh Transfer
+# Transfer
 
 基于 [iroh](https://iroh.computer) 的 P2P 文件传输桌面应用，使用 Tauri 2 构建。
 

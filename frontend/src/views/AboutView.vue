@@ -2,7 +2,7 @@
   <div class="about-container">
     <div class="about-card">
       <img :src="appIcon" alt="logo" class="about-logo" />
-      <h1 class="about-title">Iroh Transfer</h1>
+      <h1 class="about-title">Transfer</h1>
       <p class="about-version">版本 {{ version }}</p>
       <p class="about-desc">基于 iroh 的 P2P 文件传输桌面应用</p>
 
@@ -60,7 +60,7 @@ import { invoke } from '../api/tauri'
 
 const router = useRouter()
 const appIcon = '/icon.png'
-const version = ref('0.1.9')
+const version = ref('0.2.0')
 const checking = ref(false)
 const updating = ref(false)
 const hasUpdate = ref(false)
